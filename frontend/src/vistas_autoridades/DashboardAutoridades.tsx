@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Eye, UserCheck, Activity, Download, AlertCircle, FileText, CheckCircle2, Sliders, Layers } from 'lucide-react';
+import { Search, Eye, UserCheck, Activity, Download, AlertCircle, FileText, CheckCircle2, Sliders, Layers, Radio, Sparkles } from 'lucide-react';
 import { useAuth } from '../contexto/AuthContext';
 
 export const DashboardAutoridades: React.FC = () => {
@@ -7,6 +7,9 @@ export const DashboardAutoridades: React.FC = () => {
   const [codigoBusqueda, setCodigoBusqueda] = useState<string>('EST-2026-001');
   const [estudianteEncontrado, setEstudianteEncontrado] = useState<boolean>(true);
   const [descargandoPdf, setDescargandoPdf] = useState<boolean>(false);
+  const [wsConectado, setWsConectado] = useState<boolean>(false);
+  const [ultimoTimestamp, setUltimoTimestamp] = useState<string>('En espera de datos...');
+  const [historialIai, setHistorialIai] = useState<number[]>([85, 88, 87, 89, 90, 88, 86, 88]);
 
   // Estado dinámico de telemetría biométrica del estudiante conectado por WebSocket (Sprint 2 - HU-10)
   const [metricasActuales, setMetricasActuales] = useState({
@@ -35,6 +38,18 @@ export const DashboardAutoridades: React.FC = () => {
     }, 1500);
   };
 
+  // Generador de Curva SVG Dinámica para el gráfico de atención en vivo
+  const generarRutaSvg = (puntos: number[]) => {
+    if (puntos.length === 0) return 'M 0 75 L 500 75';
+    if (puntos.length === 1) return `M 0 ${125 - (puntos[0] / 100) * 100} L 500 ${125 - (puntos[0] / 100) * 100}`;
+    const stepX = 500 / (puntos.length - 1);
+    return puntos.map((p, idx) => {
+      const x = idx * stepX;
+      const y = 125 - (Math.max(0, Math.min(100, p)) / 100) * 100;
+      return `${idx === 0 ? 'M' : 'L'} ${x} ${y}`;
+    }).join(' ');
+  };
+
   // Conexión WebSockets en Tiempo Real al Canal del Estudiante Seleccionado (HU-10)
   useEffect(() => {
     if (!estudianteEncontrado || !codigoBusqueda) return;
@@ -42,17 +57,28 @@ export const DashboardAutoridades: React.FC = () => {
     const codigoEst = codigoBusqueda.trim();
     const wsUrl = `ws://127.0.0.1:8000/ws/monitoreo/${codigoEst}`;
     let socket: WebSocket | null = null;
+    let pingInterval: any = null;
 
     try {
       socket = new WebSocket(wsUrl);
 
       socket.onopen = () => {
         console.log('[DASHBOARD WS OPEN] Suscrito a la telemetría en vivo del estudiante:', codigoEst);
+        setWsConectado(true);
+
+        // Heartbeat para mantener el socket activo
+        pingInterval = setInterval(() => {
+          if (socket && socket.readyState === WebSocket.OPEN) {
+            socket.send(JSON.stringify({ ping: true, codigo_estudiante: codigoEst }));
+          }
+        }, 8000);
       };
 
       socket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          if (data.pong) return;
+
           if (data.iai !== undefined) {
             const iaiValor = Number(data.iai.toFixed(1));
             let estado = 'Atención Alta';
@@ -61,12 +87,15 @@ export const DashboardAutoridades: React.FC = () => {
 
             setMetricasActuales({
               iai: iaiValor,
-              scoreOcular: data.score_ocular || 90.0,
-              scorePostural: data.score_postural || 85.0,
-              scoreMotriz: data.score_motriz || 80.0,
+              scoreOcular: data.score_ocular !== undefined ? Number(data.score_ocular.toFixed(1)) : 90.0,
+              scorePostural: data.score_postural !== undefined ? Number(data.score_postural.toFixed(1)) : 85.0,
+              scoreMotriz: data.score_motriz !== undefined ? Number(data.score_motriz.toFixed(1)) : 80.0,
               alertaActiva: data.alerta_reenganche || iaiValor < 50,
               estadoLectura: estado
             });
+
+            setHistorialIai(prev => [...prev.slice(-24), iaiValor]);
+            setUltimoTimestamp(new Date().toLocaleTimeString());
           }
         } catch (err) {
           console.warn('Error parsing WS message in Dashboard:', err);
@@ -75,12 +104,19 @@ export const DashboardAutoridades: React.FC = () => {
 
       socket.onerror = (err) => {
         console.warn('[DASHBOARD WS ERROR] Servidor WS no disponible o en fallback:', err);
+        setWsConectado(false);
+      };
+
+      socket.onclose = () => {
+        setWsConectado(false);
       };
     } catch (e) {
       console.warn('Dashboard WS init exception:', e);
+      setWsConectado(false);
     }
 
     return () => {
+      clearInterval(pingInterval);
       if (socket) socket.close();
     };
   }, [codigoBusqueda, estudianteEncontrado]);
@@ -126,12 +162,21 @@ export const DashboardAutoridades: React.FC = () => {
           {/* Card de Ficha del Estudiante Solicitado */}
           <div className="glass-panel p-6 rounded-3xl border border-slate-800 flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-500 to-cyan-500 flex items-center justify-center text-slate-950 font-bold text-2xl shadow-lg shadow-emerald-500/20">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-emerald-500 to-cyan-500 flex items-center justify-center text-slate-950 font-bold text-2xl shadow-lg shadow-emerald-500/20 shrink-0">
                 MM
               </div>
               <div>
-                <h2 className="text-2xl font-bold font-heading text-white">Mateo Morales Villalobos</h2>
-                <p className="text-xs text-slate-400">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-2xl font-bold font-heading text-white">Mateo Morales Villalobos</h2>
+                  <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase border flex items-center gap-1 ${
+                    wsConectado
+                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                      : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                  }`}>
+                    <Radio className="w-3 h-3 animate-pulse" /> {wsConectado ? 'En Línea (WS Activo)' : 'Conectando WebSocket...'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
                   Código: <span className="font-mono text-emerald-400 font-bold">{codigoBusqueda}</span> | Edad: 14 años | 3º de Secundaria
                 </p>
                 <p className="text-xs text-amber-400 font-semibold mt-1">Diagnóstico: TDAH Leve - Atención Sostenida en Lectura Digital</p>
@@ -142,7 +187,7 @@ export const DashboardAutoridades: React.FC = () => {
             <button
               onClick={handleExportarPdf}
               disabled={descargandoPdf}
-              className="px-6 py-3 bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-violet-500/30 flex items-center gap-2 transition"
+              className="px-6 py-3 bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-violet-500/30 flex items-center gap-2 transition shrink-0"
             >
               <Download className="w-4 h-4" />
               {descargandoPdf ? 'Compilando PDF ReportLab...' : 'Exportar Reporte PDF (HU-11)'}
@@ -153,7 +198,7 @@ export const DashboardAutoridades: React.FC = () => {
           {metricasActuales.alertaActiva && (
             <div className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-2xl flex items-center gap-3 text-rose-300 text-xs font-semibold animate-pulse">
               <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
-              <span>⚠️ ALERTA DE REENGANCHE: El estudiante presenta un IAI menor al 50%. Se ha notificado al asistente virtual.</span>
+              <span>⚠️ ALERTA DE REENGANCHE EN VIVO: El estudiante presenta un IAI crítico ({metricasActuales.iai}%). El avatar HUD y Border Glow están activos en su pantalla.</span>
             </div>
           )}
 
@@ -173,10 +218,10 @@ export const DashboardAutoridades: React.FC = () => {
                     r="60"
                     stroke="currentColor"
                     strokeWidth="12"
-                    className={`transition-all duration-700 ${metricasActuales.iai >= 70 ? 'text-emerald-400' : metricasActuales.iai >= 50 ? 'text-amber-400' : 'text-rose-400'}`}
+                    className={`transition-all duration-300 ${metricasActuales.iai >= 70 ? 'text-emerald-400' : metricasActuales.iai >= 50 ? 'text-amber-400' : 'text-rose-400'}`}
                     fill="transparent"
                     strokeDasharray={376.8}
-                    strokeDashoffset={376.8 - (376.8 * metricasActuales.iai) / 100}
+                    strokeDashoffset={376.8 - (376.8 * Math.max(0, Math.min(100, metricasActuales.iai))) / 100}
                   />
                 </svg>
                 <div className="absolute text-center">
@@ -187,7 +232,7 @@ export const DashboardAutoridades: React.FC = () => {
                 </div>
               </div>
 
-              <p className="text-xs text-slate-400">Filtro de Kalman activo | WebSocket en vivo</p>
+              <p className="text-[11px] text-slate-400">Actualizado: {ultimoTimestamp}</p>
             </div>
 
             {/* Sub-índice Ocular EAR */}
@@ -196,8 +241,8 @@ export const DashboardAutoridades: React.FC = () => {
                 <Eye className="w-4 h-4 text-cyan-400" /> Sub-Índice Ocular EAR
               </span>
               <p className="text-2xl font-bold font-heading text-white">{metricasActuales.scoreOcular}%</p>
-              <p className="text-xs text-emerald-400 font-semibold">Tasa de Parpadeo Ponderada</p>
-              <p className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">Evaluación de fatiga palpebral en reposo.</p>
+              <p className="text-xs text-emerald-400 font-semibold">Tasa de Parpadeo Ponderada (40%)</p>
+              <p className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">Evaluación de fatiga palpebral y micro-somnolencia.</p>
             </div>
 
             {/* Sub-índice Postural PnP */}
@@ -206,8 +251,8 @@ export const DashboardAutoridades: React.FC = () => {
                 <Sliders className="w-4 h-4 text-violet-400" /> Sub-Índice Postural PnP
               </span>
               <p className="text-2xl font-bold font-heading text-white">{metricasActuales.scorePostural}%</p>
-              <p className="text-xs text-violet-300 font-semibold">Orientación de Cabeza (Yaw/Pitch)</p>
-              <p className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">Alineación con la pantalla de lectura.</p>
+              <p className="text-xs text-violet-300 font-semibold">Orientación de Cabeza (40%)</p>
+              <p className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">Alineación con la pantalla de lectura (Yaw/Pitch).</p>
             </div>
 
             {/* Sub-índice Motriz Hombros */}
@@ -216,33 +261,65 @@ export const DashboardAutoridades: React.FC = () => {
                 <Activity className="w-4 h-4 text-amber-400" /> Sub-Índice Motriz Hombros
               </span>
               <p className="text-2xl font-bold font-heading text-white">{metricasActuales.scoreMotriz}%</p>
-              <p className="text-xs text-amber-400 font-semibold">Varianza Espacial (Fidgeting)</p>
-              <p className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">Detección de inquietud postural física.</p>
+              <p className="text-xs text-amber-400 font-semibold">Varianza Cinemática (20%)</p>
+              <p className="text-[11px] text-slate-400 pt-2 border-t border-slate-800">Detección de hiperactividad postural (Fidgeting).</p>
             </div>
 
           </div>
 
-          {/* Gráfico SVG de Línea de Tiempo de Atención (HU-10) */}
+          {/* Gráfico SVG de Línea de Tiempo de Atención en Vivo (HU-10) */}
           <div className="glass-panel p-6 rounded-3xl border border-slate-800 space-y-4">
-            <h3 className="text-lg font-bold font-heading text-white flex items-center gap-2">
-              <Activity className="w-5 h-5 text-emerald-400" /> Línea de Tiempo de Atención e Inquietud Motriz en la Sesión
-            </h3>
-            <p className="text-xs text-slate-400">Registros cada 10 minutos durante el periodo de monitoreo activo de 2 horas</p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-bold font-heading text-white flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-emerald-400" /> Línea de Tiempo de Atención en Vivo (Timeline Stream)
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">Telemetría continua del Índice IAI suavizado mediante Filtro de Kalman 1D</p>
+              </div>
+              <span className="text-xs font-mono text-emerald-400 flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5" /> Streaming en Tiempo Real
+              </span>
+            </div>
 
-            <div className="h-48 w-full pt-4">
+            <div className="h-52 w-full pt-4 relative bg-slate-950/60 rounded-2xl border border-slate-800/80 p-4">
               <svg className="w-full h-full" viewBox="0 0 500 150">
-                <line x1="0" y1="120" x2="500" y2="120" stroke="#334155" strokeWidth="1" />
+                {/* Líneas Guía */}
+                <line x1="0" y1="125" x2="500" y2="125" stroke="#334155" strokeWidth="1" />
                 <line x1="0" y1="75" x2="500" y2="75" stroke="#334155" strokeWidth="1" strokeDasharray="4" />
-                <line x1="0" y1="30" x2="500" y2="30" stroke="#334155" strokeWidth="1" strokeDasharray="4" />
+                <line x1="0" y1="25" x2="500" y2="25" stroke="#334155" strokeWidth="1" strokeDasharray="4" />
+                
+                <text x="10" y="20" fill="#10B981" fontSize="9" fontFamily="monospace">100% (Atención Alta)</text>
+                <text x="10" y="70" fill="#F59E0B" fontSize="9" fontFamily="monospace">50% (Umbral Desatención)</text>
+                <text x="10" y="120" fill="#EF4444" fontSize="9" fontFamily="monospace">0%</text>
 
-                {/* Curva de IAI */}
+                {/* Curva dinámica de IAI */}
                 <path
-                  d="M 0 40 Q 50 20, 100 35 T 200 80 T 300 45 T 400 30 T 500 25"
+                  d={generarRutaSvg(historialIai)}
                   fill="none"
-                  stroke="#10B981"
+                  stroke={metricasActuales.iai >= 70 ? '#10B981' : metricasActuales.iai >= 50 ? '#F59E0B' : '#EF4444'}
                   strokeWidth="3"
+                  className="transition-all duration-300"
                 />
-                <circle cx="200" cy="80" r="5" fill="#EF4444" className="animate-pulse" />
+
+                {/* Puntos sobre la línea */}
+                {historialIai.map((p, idx) => {
+                  const stepX = 500 / Math.max(1, historialIai.length - 1);
+                  const x = idx * stepX;
+                  const y = 125 - (Math.max(0, Math.min(100, p)) / 100) * 100;
+                  const esUltimo = idx === historialIai.length - 1;
+                  return (
+                    <circle
+                      key={idx}
+                      cx={x}
+                      cy={y}
+                      r={esUltimo ? 6 : 3}
+                      fill={p >= 70 ? '#10B981' : p >= 50 ? '#F59E0B' : '#EF4444'}
+                      stroke="#020617"
+                      strokeWidth={esUltimo ? 2 : 1}
+                      className={esUltimo ? 'animate-pulse' : ''}
+                    />
+                  );
+                })}
               </svg>
             </div>
           </div>
@@ -259,3 +336,4 @@ export const DashboardAutoridades: React.FC = () => {
     </div>
   );
 };
+

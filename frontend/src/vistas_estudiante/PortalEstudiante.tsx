@@ -30,6 +30,8 @@ export const PortalEstudiante: React.FC = () => {
     fotogramas: 0
   });
 
+  const telemetriaRef = useRef(telemetria);
+
   const [parametrosFinales, setParametrosFinales] = useState<{
     earBase: number;
     earDesviacion: number;
@@ -100,37 +102,38 @@ export const PortalEstudiante: React.FC = () => {
       console.warn('WebSocket init exception:', e);
     }
 
-    // Enviar paquete biométrico por el socket cada 500ms
+    // Enviar paquete biométrico por el socket cada 250ms de forma fluida
     const intervalWS = setInterval(() => {
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({
           codigo_estudiante: codigoEst,
-          ear: telemetria.ear,
+          ear: telemetriaRef.current.ear,
           ear_base: parametrosFinales?.earBase || 0.28,
-          yaw: telemetria.yaw,
-          pitch: telemetria.pitch,
+          yaw: telemetriaRef.current.yaw,
+          pitch: telemetriaRef.current.pitch,
           varianza_hombros: 0.02,
           timestamp: new Date().toISOString()
         }));
       }
-    }, 500);
+    }, 250);
 
     return () => {
       clearInterval(intervalWS);
       if (socket) socket.close();
     };
-  }, [camaraActiva, telemetria, parametrosFinales, usuario]);
+  }, [camaraActiva, parametrosFinales?.earBase, usuario?.codigo_estudiante]);
 
   // Simular o capturar un parpadeo manual voluntario (EAR < 0.20)
   const simularParpadeoVoluntario = () => {
     if (!calibrando) return;
-    setTelemetria(prev => ({
-      ...prev,
-      ear: 0.165, // Cierre palpebral < 0.20
-      parpadeos: prev.parpadeos + 1
-    }));
-    // Registrar en el acumulador
-    acumuladorRef.current.agregarFotograma(0.165, telemetria.yaw, telemetria.pitch, telemetria.roll);
+    const nuevoValor = {
+      ...telemetriaRef.current,
+      ear: 0.165,
+      parpadeos: telemetriaRef.current.parpadeos + 1
+    };
+    telemetriaRef.current = nuevoValor;
+    setTelemetria(nuevoValor);
+    acumuladorRef.current.agregarFotograma(0.165, nuevoValor.yaw, nuevoValor.pitch, nuevoValor.roll);
   };
 
   // Manejar métricas biométricas en vivo provenientes de MediaPipe FaceMesh
@@ -142,14 +145,20 @@ export const PortalEstudiante: React.FC = () => {
     parpadeo: boolean;
     rostroDetectado: boolean;
   }) => {
-    setTelemetria(prev => ({
+    const nuevoParpadeos = metricas.parpadeo ? telemetriaRef.current.parpadeos + 1 : telemetriaRef.current.parpadeos;
+    const nuevoFotogramas = telemetriaRef.current.fotogramas + 1;
+
+    const actual = {
       ear: metricas.ear,
       yaw: metricas.yaw,
       pitch: metricas.pitch,
       roll: metricas.roll,
-      parpadeos: metricas.parpadeo ? prev.parpadeos + 1 : prev.parpadeos,
-      fotogramas: prev.fotogramas + 1
-    }));
+      parpadeos: nuevoParpadeos,
+      fotogramas: nuevoFotogramas
+    };
+
+    telemetriaRef.current = actual;
+    setTelemetria(actual);
 
     if (calibrando && metricas.rostroDetectado) {
       acumuladorRef.current.agregarFotograma(

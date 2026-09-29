@@ -60,12 +60,16 @@ async def websocket_monitoreo_estudiante(websocket: WebSocket, codigo_estudiante
             raw_data = await websocket.receive_text()
             payload = json.loads(raw_data)
 
+            if payload.get("ping"):
+                await websocket.send_text(json.dumps({"pong": True, "codigo_estudiante": codigo_estudiante}))
+                continue
+
             # Extraer variables biométricas entrantes
-            ear_actual = payload.get("ear", 0.28)
-            ear_base = payload.get("ear_base", 0.28)
-            yaw = payload.get("yaw", 0.0)
-            pitch = payload.get("pitch", 0.0)
-            varianza_hombros = payload.get("varianza_hombros", 0.02)
+            ear_actual = float(payload.get("ear", 0.28))
+            ear_base = float(payload.get("ear_base", 0.28))
+            yaw = float(payload.get("yaw", 0.0))
+            pitch = float(payload.get("pitch", 0.0))
+            varianza_hombros = float(payload.get("varianza_hombros", 0.02))
 
             # Procesar Fusión Multimodal con Filtro de Kalman 1D
             resultado_iai = motor.calcular_iai(
