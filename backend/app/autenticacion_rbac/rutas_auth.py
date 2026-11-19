@@ -8,7 +8,7 @@ from typing import Optional
 from datetime import datetime
 
 from app.persistencia.config_db import get_db
-from app.persistencia.modelos_orm import Usuario, Estudiante, RolUsuario
+from app.persistencia.modelos_orm import Usuario, Estudiante, RolUsuario, SubtipoTDAH
 from app.autenticacion_rbac.seguridad import verify_password, get_password_hash, create_access_token, decode_access_token
 
 router = APIRouter(prefix="/auth", tags=["Autenticación & Usuarios (RBAC)"])
@@ -33,6 +33,7 @@ class RegistroUsuarioSchema(BaseModel):
     nombre_completo: str
     codigo_estudiante: Optional[str] = None
     grado_escolar: Optional[str] = None
+    subtipo_tdah: Optional[SubtipoTDAH] = SubtipoTDAH.F90_2
 
 
 class UsuarioMeSchema(BaseModel):
@@ -56,7 +57,7 @@ async def get_usuario_actual(
             headers={"WWW-Authenticate": "Bearer"},
         )
     username: str = payload.get("sub")
-    query = select(Usuario).where(Usuario.username == username)
+    query = select(Usuario).options(selectinload(Usuario.estudiante)).where(Usuario.username == username)
     result = await db.execute(query)
     user = result.scalars().first()
     if not user:
@@ -72,16 +73,19 @@ async def login_para_obtener_token(
     db: AsyncSession = Depends(get_db)
 ):
     """Autentica usuarios (Estudiante, Docente, Psicólogo, Tutor, Director, Admin) y emite un Token JWT."""
-    # Permitir login por username o por código de estudiante (para los estudiantes)
+    # Permitir login por username o por correo o por código de estudiante
+    u_login = form_data.username.strip()
     query = select(Usuario).options(selectinload(Usuario.estudiante)).where(
-        (Usuario.username == form_data.username) | (Usuario.email == form_data.username)
+        (Usuario.username == u_login) | (Usuario.email == u_login.lower())
     )
     result = await db.execute(query)
     user = result.scalars().first()
 
-    # Si no se encontró por username, buscar si form_data.username es un codigo_estudiante
+    # Si no se encontró por username o email, buscar si form_data.username es un codigo_estudiante
     if not user:
-        st_query = select(Estudiante).options(selectinload(Estudiante.usuario).selectinload(Usuario.estudiante)).where(Estudiante.codigo_estudiante == form_data.username)
+        st_query = select(Estudiante).options(selectinload(Estudiante.usuario).selectinload(Usuario.estudiante)).where(
+            Estudiante.codigo_estudiante == u_login.upper()
+        )
         st_res = await db.execute(st_query)
         student = st_res.scalars().first()
         if student and student.usuario:
@@ -115,35 +119,52 @@ async def registrar_usuario(
     db: AsyncSession = Depends(get_db)
 ):
     """Registra nuevos usuarios con asignación de Rol (RBAC)."""
-    # Verificar disponibilidad de username/email
-    query = select(Usuario).where((Usuario.username == datos.username) | (Usuario.email == datos.email))
+    # Verificar disponibilidad de username/email (limpieza de espacios y minúsculas para email)
+    u_clean = datos.username.strip()
+    e_clean = datos.email.strip().lower()
+    query = select(Usuario).where((Usuario.username == u_clean) | (Usuario.email == e_clean))
     res = await db.execute(query)
     if res.scalars().first():
         raise HTTPException(status_code=400, detail="El nombre de usuario o correo ya está registrado.")
 
     nuevo_usuario = Usuario(
-        username=datos.username,
+        username=u_clean,
         password_hash=get_password_hash(datos.password),
-        email=datos.email,
+        email=e_clean,
         rol=datos.rol
     )
     db.add(nuevo_usuario)
     await db.commit()
     await db.refresh(nuevo_usuario)
 
-    # Si el rol es ESTUDIANTE, crear perfil de estudiante
+    # Si el rol es ESTUDIANTE, validar y crear perfil de estudiante
+    cod_est_final = None
     if datos.rol == RolUsuario.ESTUDIANTE:
-        cod_est = datos.codigo_estudiante or f"EST-2026-{nuevo_usuario.id_usuario[:4].upper()}"
+        if datos.codigo_estudiante:
+            # Validar que el código personalizado no esté ya registrado
+            check_cod = await db.execute(select(Estudiante).where(Estudiante.codigo_estudiante == datos.codigo_estudiante.strip().upper()))
+            if check_cod.scalars().first():
+                raise HTTPException(status_code=400, detail=f"El código de estudiante '{datos.codigo_estudiante}' ya está registrado.")
+            cod_est_final = datos.codigo_estudiante.strip().upper()
+        else:
+            cod_est_final = f"EST-2026-{nuevo_usuario.id_usuario[:4].upper()}"
+
         nuevo_estudiante = Estudiante(
-            codigo_estudiante=cod_est,
-            nombre_completo=datos.nombre_completo,
-            grado_escolar=datos.grado_escolar or "Secundaria",
+            codigo_estudiante=cod_est_final,
+            nombre_completo=datos.nombre_completo.strip(),
+            grado_escolar=datos.grado_escolar or "1º de Secundaria",
+            subtipo_tdah=datos.subtipo_tdah or SubtipoTDAH.F90_2,
             id_usuario=nuevo_usuario.id_usuario
         )
         db.add(nuevo_estudiante)
         await db.commit()
 
-    return {"mensaje": f"Usuario '{datos.username}' creado exitosamente con rol {datos.rol.value}"}
+    return {
+        "mensaje": f"Usuario '{datos.username}' creado exitosamente con rol {datos.rol.value}",
+        "username": nuevo_usuario.username,
+        "rol": nuevo_usuario.rol.value,
+        "codigo_estudiante": cod_est_final
+    }
 
 
 @router.get("/me", response_model=UsuarioMeSchema)

@@ -1,6 +1,11 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { Camera, CameraOff, Video, AlertTriangle, CheckCircle2, RefreshCw, Layers, Sparkles, Eye, UserCheck } from 'lucide-react';
 import { procesarLandmarksMediaPipe, ResultadoBiometrico } from '../servicios_ws/calculo_biometrico';
+
+export interface PrevisualizadorCamaraHandle {
+  encenderCamara: () => Promise<void>;
+  apagarCamara: () => void;
+}
 
 interface PrevisualizadorCamaraProps {
   onCamaraEstadoChange?: (activa: boolean) => void;
@@ -11,21 +16,45 @@ interface PrevisualizadorCamaraProps {
     roll: number;
     parpadeo: boolean;
     rostroDetectado: boolean;
+    ausenciaEstudiante: boolean;
+    mar: number;
+    esBostezo: boolean;
+    distractorExterno: boolean;
+    numRostros: number;
+    esStaring: boolean;
+    esSlumping: boolean;
+    esSomnolencia: boolean;
   }) => void;
+  onFrameSnapshot?: (base64Frame: string) => void;
   segundosRestantes?: number;
+  forzarEncendido?: boolean;
+  timestampUltimaInteraccion?: number;
+  modoProtegido?: boolean;
 }
 
-export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
+export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, PrevisualizadorCamaraProps>(({
   onCamaraEstadoChange,
   onMetricasEnVivo,
-  segundosRestantes = 7200
-}) => {
+  onFrameSnapshot,
+  segundosRestantes = 7200,
+  forzarEncendido = false,
+  timestampUltimaInteraccion = 0,
+  modoProtegido = true
+}, ref) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasOverlayRef = useRef<HTMLCanvasElement>(null);
   const canvasSimuladoRef = useRef<HTMLCanvasElement>(null);
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ultimoSnapshotRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
   const faceMeshRef = useRef<any>(null);
   const animFrameIdRef = useRef<number | null>(null);
+
+  // Referencia mutable reactiva para modoProtegido (Evita stale closures en MediaPipe y permite cambio instantáneo)
+  const modoProtegidoRef = useRef<boolean>(modoProtegido);
+  useEffect(() => {
+    modoProtegidoRef.current = modoProtegido;
+  }, [modoProtegido]);
 
   const [camaraActiva, setCamaraActiva] = useState<boolean>(false);
   const [cargandoPermiso, setCargandoPermiso] = useState<boolean>(false);
@@ -37,8 +66,29 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
   const [mostrarMallaFacial, setMostrarMallaFacial] = useState<boolean>(true);
   const [rostroDetectado, setRostroDetectado] = useState<boolean>(false);
   const [earActualVisual, setEarActualVisual] = useState<number>(0.28);
+  const [marActualVisual, setMarActualVisual] = useState<number>(0.25);
+  const [alertaVisualActiva, setAlertaVisualActiva] = useState<string | null>(null);
 
   const ojoCerradoPrevioRef = useRef<boolean>(false);
+  const framesSinRostroRef = useRef<number>(0);
+  const tiempoInicioBostezoRef = useRef<number>(0);
+  const tiempoInicioInmovilRef = useRef<number>(performance.now());
+  const poseAnclajeInmovilRef = useRef<{ yaw: number; pitch: number }>({ yaw: 0, pitch: 0 });
+  const ultimoParpadeoTsRef = useRef<number>(performance.now());
+  const tiempoInicioOclusionRef = useRef<number>(0);
+  const earVentanaRef = useRef<number[]>([]);
+  const interaccionPreviaTsRef = useRef<number>(0);
+  const narizYBaseRef = useRef<number>(0.5);
+  const tiempoInicioSlumpingRef = useRef<number>(0);
+
+  // Escuchar eventos de interacción de lectura (Scroll, Clicks, Teclas) para descartar mirada perdida
+  useEffect(() => {
+    if (timestampUltimaInteraccion && timestampUltimaInteraccion !== interaccionPreviaTsRef.current) {
+      interaccionPreviaTsRef.current = timestampUltimaInteraccion;
+      tiempoInicioInmovilRef.current = performance.now();
+      ultimoParpadeoTsRef.current = performance.now();
+    }
+  }, [timestampUltimaInteraccion]);
 
   // 1. Enumerar dispositivos de video disponibles
   const obtenerDispositivos = async () => {
@@ -68,7 +118,7 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
           });
 
           fm.setOptions({
-            maxNumFaces: 1,
+            maxNumFaces: 3, // Detección de hasta 3 rostros simultáneos (Monitoreo de distractores en aula)
             refineLandmarks: true,
             minDetectionConfidence: 0.5,
             minTrackingConfidence: 0.5
@@ -95,24 +145,130 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    // Sincronizar dimensiones intrínsecas 1:1 con la resolución real de la webcam
+    if (videoRef.current && videoRef.current.videoWidth > 0) {
+      if (canvas.width !== videoRef.current.videoWidth || canvas.height !== videoRef.current.videoHeight) {
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+      }
+    }
+
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const numRostros = results.multiFaceLandmarks?.length || 0;
+    const distractorExterno = numRostros > 1;
 
     if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
       const landmarks = results.multiFaceLandmarks[0];
+      framesSinRostroRef.current = 0;
       setRostroDetectado(true);
 
       // Procesar matemáticas de visión artificial
       const metricas = procesarLandmarksMediaPipe(landmarks);
       setEarActualVisual(metricas.earPromedio);
+      setMarActualVisual(metricas.mar);
 
-      // Detección de flanco de parpadeo
-      let parpadeoOcurrido = false;
-      if (metricas.earPromedio < 0.20 && !ojoCerradoPrevioRef.current) {
-        parpadeoOcurrido = true;
-        ojoCerradoPrevioRef.current = true;
-      } else if (metricas.earPromedio >= 0.20) {
-        ojoCerradoPrevioRef.current = false;
+      const ahora = performance.now();
+
+      // Ventana móvil de EAR de los últimos ~30 fotogramas (calibración adaptativa en vivo)
+      if (metricas.earPromedio > 0.12) {
+        earVentanaRef.current.push(metricas.earPromedio);
+        if (earVentanaRef.current.length > 30) {
+          earVentanaRef.current.shift();
+        }
       }
+      const earMediaMovil = earVentanaRef.current.length > 5
+        ? earVentanaRef.current.reduce((a, b) => a + b, 0) / earVentanaRef.current.length
+        : 0.28;
+
+      // Detección adaptativa de parpadeo y evaluación de Somnolencia / Párpados Cansados (PERCLOS)
+      const umbralParpadeoAdaptativo = Math.max(0.18, earMediaMovil * 0.80);
+      const esOjoCerradoInstante = metricas.earPromedio <= umbralParpadeoAdaptativo;
+
+      let parpadeoOcurrido = false;
+      let esSomnolenciaConfirmada = false;
+
+      if (esOjoCerradoInstante) {
+        if (!ojoCerradoPrevioRef.current) {
+          parpadeoOcurrido = true;
+          ojoCerradoPrevioRef.current = true;
+          ultimoParpadeoTsRef.current = ahora;
+          tiempoInicioInmovilRef.current = ahora;
+          tiempoInicioOclusionRef.current = ahora;
+        } else {
+          // El ojo continúa cerrado o con párpados pesados/caídos (Somnolencia o Micro-sueño)
+          const duracionOclusionSeg = (ahora - tiempoInicioOclusionRef.current) / 1000;
+          if (duracionOclusionSeg >= 1.2) {
+            esSomnolenciaConfirmada = true;
+          }
+        }
+      } else {
+        ojoCerradoPrevioRef.current = false;
+        tiempoInicioOclusionRef.current = 0;
+      }
+
+      // Evaluación de Bostezo sostenido (MAR >= 0.65 por >= 1.8 segundos continuos)
+      if (metricas.esBostezo) {
+        if (tiempoInicioBostezoRef.current === 0) {
+          tiempoInicioBostezoRef.current = ahora;
+        }
+      } else {
+        tiempoInicioBostezoRef.current = 0;
+      }
+      const esBostezoConfirmado =
+        tiempoInicioBostezoRef.current > 0 &&
+        (ahora - tiempoInicioBostezoRef.current) / 1000 >= 1.8;
+
+      // Evaluación de Staring / Mirada Perdida (Criterio Clínico TDAH):
+      // 1. Zona ergonómica de pantalla (visión directa sobre el documento escolar):
+      const enZonaLecturaPantalla =
+        Math.abs(metricas.yaw) <= 22.0 &&
+        metricas.pitch >= -25.0 &&
+        metricas.pitch <= 15.0;
+
+      // 2. Micro-desvíos cefálicos: Solo un giro real de cabeza (> 4.0°) resetea el anclaje
+      //    (evita que el ruido natural de la webcam de 1-2° o respiración reseteen el timer)
+      const desvioYawAnclaje = Math.abs(metricas.yaw - poseAnclajeInmovilRef.current.yaw);
+      const desvioPitchAnclaje = Math.abs(metricas.pitch - poseAnclajeInmovilRef.current.pitch);
+
+      if (desvioYawAnclaje > 4.0 || desvioPitchAnclaje > 4.0) {
+        poseAnclajeInmovilRef.current = { yaw: metricas.yaw, pitch: metricas.pitch };
+        tiempoInicioInmovilRef.current = ahora;
+      }
+
+      const tiempoInmovilSegundos = (ahora - tiempoInicioInmovilRef.current) / 1000;
+      const tiempoSinParpadeoSegundos = (ahora - ultimoParpadeoTsRef.current) / 1000;
+
+      // Criterio Clínico TDAH:
+      // - Si está en zona de pantalla: 8.0 segundos continuos rígido y sin parpadear
+      // - Si está mirando fuera de la pantalla (pared/techo): 5.0 segundos continuos
+      const umbralStaringSegundos = enZonaLecturaPantalla ? 8.0 : 5.0;
+      const esStaringConfirmado =
+        tiempoInmovilSegundos >= umbralStaringSegundos &&
+        tiempoSinParpadeoSegundos >= umbralStaringSegundos;
+
+      // Calibración adaptativa y evaluación de Slumping (Hundimiento Postural por >= 3.0s)
+      if (narizYBaseRef.current === 0.5 && metricas.narizY > 0.1) {
+        narizYBaseRef.current = metricas.narizY;
+      }
+      if (metricas.narizY - narizYBaseRef.current > 0.15) {
+        if (tiempoInicioSlumpingRef.current === 0) {
+          tiempoInicioSlumpingRef.current = ahora;
+        }
+      } else {
+        tiempoInicioSlumpingRef.current = 0;
+      }
+      const esSlumpingConfirmado =
+        tiempoInicioSlumpingRef.current > 0 &&
+        (ahora - tiempoInicioSlumpingRef.current) / 1000 >= 3.0;
+
+      // Alerta visual contextual para previsualización
+      if (esSomnolenciaConfirmada) setAlertaVisualActiva('Párpados Cansados / Somnolencia');
+      else if (esBostezoConfirmado) setAlertaVisualActiva('Bostezo Detectado');
+      else if (distractorExterno) setAlertaVisualActiva('Distractor Externo');
+      else if (esStaringConfirmado) setAlertaVisualActiva('Mirada Perdida (Staring)');
+      else if (esSlumpingConfirmado) setAlertaVisualActiva('Hundimiento Postural');
+      else setAlertaVisualActiva(null);
 
       // Notificar al componente padre (PortalEstudiante)
       if (onMetricasEnVivo) {
@@ -122,21 +278,29 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
           pitch: metricas.pitch,
           roll: metricas.roll,
           parpadeo: parpadeoOcurrido,
-          rostroDetectado: true
+          rostroDetectado: true,
+          ausenciaEstudiante: false,
+          mar: metricas.mar,
+          esBostezo: esBostezoConfirmado,
+          distractorExterno: distractorExterno,
+          numRostros: numRostros,
+          esStaring: esStaringConfirmado,
+          esSlumping: esSlumpingConfirmado,
+          esSomnolencia: esSomnolenciaConfirmada
         });
       }
 
-      // Dibujar Malla Facial en Canvas Overlay (si está activo)
+      // Dibujar Malla Facial, Vector 3D de Mirada y Cinturón Escapular en Canvas Overlay
       if (mostrarMallaFacial) {
         const w = canvas.width;
         const h = canvas.height;
 
-        // Invertir horizontalmente para efecto espejo
+        // Invertir horizontalmente para efecto espejo sincronizado con video scaleX(-1)
         ctx.save();
         ctx.translate(w, 0);
         ctx.scale(-1, 1);
 
-        // Dibujar contorno de ojos (Ojo Izquierdo: 33, 160, 158, 133, 153, 144)
+        // 1. Contorno de Ojo Izquierdo
         const ojoIzqIdx = [33, 160, 158, 133, 153, 144];
         ctx.strokeStyle = metricas.earPromedio < 0.20 ? '#F43F5E' : '#06B6D4';
         ctx.lineWidth = 2.5;
@@ -151,8 +315,10 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
         ctx.closePath();
         ctx.stroke();
 
-        // Dibujar contorno de ojos (Ojo Derecho: 362, 385, 387, 263, 373, 380)
+        // 2. Contorno de Ojo Derecho
         const ojoDerIdx = [362, 385, 387, 263, 373, 380];
+        ctx.strokeStyle = metricas.earPromedio < 0.20 ? '#F43F5E' : '#06B6D4';
+        ctx.lineWidth = 2.5;
         ctx.beginPath();
         ojoDerIdx.forEach((idx, i) => {
           const pt = landmarks[idx];
@@ -164,31 +330,272 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
         ctx.closePath();
         ctx.stroke();
 
-        // Dibujar puntos faciales clave (Nariz: 1, Barbilla: 152)
+        // Puntos de Iris / Pupilas
+        const ptIrisIzq = landmarks[468] || landmarks[159] || landmarks[33];
+        const ptIrisDer = landmarks[473] || landmarks[386] || landmarks[362];
+        ctx.fillStyle = metricas.earPromedio < 0.20 ? '#F43F5E' : '#10B981';
+        if (ptIrisIzq) {
+          ctx.beginPath();
+          ctx.arc(ptIrisIzq.x * w, ptIrisIzq.y * h, 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        if (ptIrisDer) {
+          ctx.beginPath();
+          ctx.arc(ptIrisDer.x * w, ptIrisDer.y * h, 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 3. Nariz y Vector Tridimensional de Orientación Cefálica (SolvePnP)
         const ptNariz = landmarks[1];
         if (ptNariz) {
           ctx.fillStyle = '#10B981';
           ctx.beginPath();
-          ctx.arc(ptNariz.x * w, ptNariz.y * h, 4, 0, Math.PI * 2);
+          ctx.arc(ptNariz.x * w, ptNariz.y * h, 4.5, 0, Math.PI * 2);
           ctx.fill();
+
+          // Vector de mirada proyectado
+          const largoGaze = 50;
+          const radYaw = (metricas.yaw * Math.PI) / 180;
+          const radPitch = (metricas.pitch * Math.PI) / 180;
+          const gazeEndX = ptNariz.x * w - Math.sin(radYaw) * largoGaze;
+          const gazeEndY = ptNariz.y * h - Math.sin(radPitch) * largoGaze;
+
+          const enCono = Math.abs(metricas.yaw) <= 25 && Math.abs(metricas.pitch) <= 20;
+          ctx.strokeStyle = enCono ? '#10B981' : '#F59E0B';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.moveTo(ptNariz.x * w, ptNariz.y * h);
+          ctx.lineTo(gazeEndX, gazeEndY);
+          ctx.stroke();
+
+          ctx.fillStyle = enCono ? '#10B981' : '#F59E0B';
+          ctx.beginPath();
+          ctx.arc(gazeEndX, gazeEndY, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 4. Cinturón Escapular y Hombros (Línea de Postura y Detección de Fidgeting)
+        const ptMenton = landmarks[152];
+        const ptFrente = landmarks[10];
+        if (ptMenton && ptFrente) {
+          const altoRostro = Math.sqrt(
+            Math.pow((ptMenton.x - ptFrente.x) * w, 2) + 
+            Math.pow((ptMenton.y - ptFrente.y) * h, 2)
+          );
+
+          // Proyección anatómica de la barra de hombros bajo el mentón
+          const centroTorsoX = ptMenton.x * w;
+          const hombrosBaseY = Math.min(h - 14, ptMenton.y * h + altoRostro * 0.45);
+          const anchoHombros = altoRostro * 1.35;
+          const inclinacionRad = (metricas.roll * Math.PI) / 180;
+
+          const hIzqX = centroTorsoX - anchoHombros * Math.cos(inclinacionRad);
+          const hIzqY = hombrosBaseY - anchoHombros * Math.sin(inclinacionRad) * 0.35;
+          const hDerX = centroTorsoX + anchoHombros * Math.cos(inclinacionRad);
+          const hDerY = hombrosBaseY + anchoHombros * Math.sin(inclinacionRad) * 0.35;
+
+          const posturaEstable = Math.abs(metricas.roll) <= 12;
+          const colorPostura = posturaEstable ? '#10B981' : '#F59E0B';
+
+          // Eje cervical (cuello) punteado
+          ctx.strokeStyle = colorPostura;
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(ptMenton.x * w, ptMenton.y * h);
+          ctx.lineTo(centroTorsoX, hombrosBaseY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Barra escapular continua (hombro a hombro)
+          ctx.strokeStyle = colorPostura;
+          ctx.lineWidth = 3.5;
+          ctx.beginPath();
+          ctx.moveTo(hIzqX, hIzqY);
+          ctx.lineTo(hDerX, hDerY);
+          ctx.stroke();
+
+          // Articulaciones acromioclaviculares (puntos de hombro)
+          ctx.fillStyle = colorPostura;
+          ctx.beginPath();
+          ctx.arc(hIzqX, hIzqY, 6, 0, Math.PI * 2);
+          ctx.arc(hDerX, hDerY, 6, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 5. Contorno de Boca (Apertura MAR y Bostezos)
+        const ptBocaSup = landmarks[13];
+        const ptBocaInf = landmarks[14];
+        const ptBocaIzq = landmarks[78];
+        const ptBocaDer = landmarks[308];
+        if (ptBocaSup && ptBocaInf && ptBocaIzq && ptBocaDer) {
+          ctx.strokeStyle = esBostezoConfirmado ? '#F43F5E' : (metricas.mar > 0.45 ? '#F59E0B' : '#06B6D4');
+          ctx.lineWidth = esBostezoConfirmado ? 3.5 : 2;
+          ctx.beginPath();
+          ctx.moveTo(ptBocaIzq.x * w, ptBocaIzq.y * h);
+          ctx.lineTo(ptBocaSup.x * w, ptBocaSup.y * h);
+          ctx.lineTo(ptBocaDer.x * w, ptBocaDer.y * h);
+          ctx.lineTo(ptBocaInf.x * w, ptBocaInf.y * h);
+          ctx.closePath();
+          ctx.stroke();
+        }
+
+        // 6. Resaltado de Distractores Externos (Múltiples rostros en aula)
+        if (results.multiFaceLandmarks.length > 1) {
+          for (let f = 1; f < results.multiFaceLandmarks.length; f++) {
+            const secLandmarks = results.multiFaceLandmarks[f];
+            const secNariz = secLandmarks[1];
+            if (secNariz) {
+              ctx.strokeStyle = '#F43F5E';
+              ctx.lineWidth = 3;
+              ctx.beginPath();
+              ctx.arc(secNariz.x * w, secNariz.y * h, 38, 0, Math.PI * 2);
+              ctx.stroke();
+              ctx.fillStyle = '#F43F5E';
+              ctx.font = 'bold 12px Inter, sans-serif';
+              ctx.fillText('Distractor', secNariz.x * w - 28, secNariz.y * h - 44);
+            }
+          }
         }
 
         ctx.restore();
       }
+
+      // Captura periódica de fotograma compuesto en alta definición (~6 FPS fluido a 160ms) para el monitor en vivo del docente
+      if (onFrameSnapshot && ahora - ultimoSnapshotRef.current >= 160) {
+        ultimoSnapshotRef.current = ahora;
+        if (!offscreenCanvasRef.current) {
+          offscreenCanvasRef.current = document.createElement('canvas');
+        }
+        const snap = offscreenCanvasRef.current;
+        const vw = videoRef.current?.videoWidth || 640;
+        const vh = videoRef.current?.videoHeight || 480;
+
+        // Mantener resolución nítida HD (hasta 840px de ancho) preservando relación de aspecto
+        const targetW = Math.min(840, vw);
+        const targetH = Math.round((vh / vw) * targetW) || 480;
+
+        if (snap.width !== targetW || snap.height !== targetH) {
+          snap.width = targetW;
+          snap.height = targetH;
+        }
+        const sCtx = snap.getContext('2d');
+        if (sCtx && videoRef.current && videoRef.current.readyState >= 2) {
+          try {
+            sCtx.imageSmoothingEnabled = true;
+            sCtx.imageSmoothingQuality = 'high';
+
+            if (modoProtegidoRef.current) {
+              // 🛡️ Anonimización Facial (Privacy by Design / Malla 3D)
+              sCtx.fillStyle = '#0B1120';
+              sCtx.fillRect(0, 0, targetW, targetH);
+              if (canvas) {
+                sCtx.drawImage(canvas, 0, 0, targetW, targetH);
+              }
+              // Banner de Anonimización
+              sCtx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+              sCtx.fillRect(12, 12, targetW - 24, 28);
+              sCtx.fillStyle = '#38BDF8';
+              sCtx.font = 'bold 11px Inter, sans-serif';
+              sCtx.textAlign = 'center';
+              sCtx.fillText('🛡️ MALLA FACIAL 3D ANONIMIZADA (PRIVACY BY DESIGN)', targetW / 2, 30);
+            } else {
+              // Fotograma real de cámara web (con consentimiento firmado)
+              sCtx.save();
+              sCtx.translate(targetW, 0);
+              sCtx.scale(-1, 1);
+              sCtx.drawImage(videoRef.current, 0, 0, targetW, targetH);
+              sCtx.restore();
+
+              if (canvas) {
+                sCtx.drawImage(canvas, 0, 0, targetW, targetH);
+              }
+            }
+
+            // Calidad JPEG nítida y clara al 82% (0.82) sin artefactos de compresión
+            const base64 = snap.toDataURL('image/jpeg', 0.82);
+            onFrameSnapshot(base64);
+          } catch (e) {
+            // Manejo de canvas no disponible
+          }
+        }
+      }
     } else {
-      setRostroDetectado(false);
+      framesSinRostroRef.current += 1;
+      const esAusente = framesSinRostroRef.current >= 10;
+      if (esAusente) {
+        setRostroDetectado(false);
+        setAlertaVisualActiva('Estudiante Fuera de Cámara');
+      }
       if (onMetricasEnVivo) {
         onMetricasEnVivo({
-          ear: 0.28,
+          ear: 0.0,
           yaw: 0.0,
           pitch: 0.0,
           roll: 0.0,
           parpadeo: false,
-          rostroDetectado: false
+          rostroDetectado: !esAusente,
+          ausenciaEstudiante: esAusente,
+          mar: 0.0,
+          esBostezo: false,
+          distractorExterno: false,
+          numRostros: 0,
+          esStaring: false,
+          esSlumping: false,
+          esSomnolencia: false
         });
       }
+
+      // Transmisión continua fluida a 160ms cuando el estudiante se sale del encuadre (evita congelamiento)
+      if (onFrameSnapshot && performance.now() - ultimoSnapshotRef.current >= 160) {
+        ultimoSnapshotRef.current = performance.now();
+        let snap = offscreenCanvasRef.current;
+        if (!snap) {
+          snap = document.createElement('canvas');
+          offscreenCanvasRef.current = snap;
+        }
+        const vw = videoRef.current?.videoWidth || 640;
+        const vh = videoRef.current?.videoHeight || 480;
+        const targetW = Math.min(840, vw);
+        const targetH = Math.round((vh / vw) * targetW) || 480;
+        if (snap.width !== targetW || snap.height !== targetH) {
+          snap.width = targetW;
+          snap.height = targetH;
+        }
+        const sCtx = snap.getContext('2d');
+        if (sCtx && videoRef.current && videoRef.current.readyState >= 2) {
+          try {
+            sCtx.imageSmoothingEnabled = true;
+            sCtx.imageSmoothingQuality = 'high';
+
+            if (modoProtegidoRef.current) {
+              sCtx.fillStyle = '#0B1120';
+              sCtx.fillRect(0, 0, targetW, targetH);
+            } else {
+              sCtx.save();
+              sCtx.translate(targetW, 0);
+              sCtx.scale(-1, 1);
+              sCtx.drawImage(videoRef.current, 0, 0, targetW, targetH);
+              sCtx.restore();
+            }
+
+            // Rótulo informativo en vivo sobre el frame
+            sCtx.fillStyle = 'rgba(239, 68, 68, 0.85)';
+            sCtx.fillRect(16, 16, targetW - 32, 42);
+            sCtx.fillStyle = '#ffffff';
+            sCtx.font = 'bold 15px sans-serif';
+            sCtx.textAlign = 'center';
+            sCtx.fillText('⚠️ ESTUDIANTE FUERA DE ENCUADRE / AUSENTE', targetW / 2, 42);
+
+            const base64 = snap.toDataURL('image/jpeg', 0.82);
+            onFrameSnapshot(base64);
+          } catch (e) {
+            // Manejo de excepción canvas
+          }
+        }
+      }
     }
-  }, [mostrarMallaFacial, onMetricasEnVivo]);
+  }, [mostrarMallaFacial, onMetricasEnVivo, onFrameSnapshot]);
 
   // 4. Bucle de Procesamiento continuo de fotogramas
   useEffect(() => {
@@ -322,6 +729,13 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
     }
   };
 
+  // Encendido automático si se solicita externamente (p. ej., desde Modo Estudio)
+  useEffect(() => {
+    if (forzarEncendido && !camaraActiva && !cargandoPermiso) {
+      encenderCamara();
+    }
+  }, [forzarEncendido]);
+
   // 6. Modo Cámara Simulada Demo
   const activarCamaraSimulada = () => {
     apagarCamara();
@@ -359,12 +773,20 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
         ctx.font = '12px Inter';
         ctx.fillText('MediaPipe Holistic Landmark Mesh Active (60 FPS)', 180, 330);
 
+        if (onFrameSnapshot && performance.now() - ultimoSnapshotRef.current >= 160) {
+          ultimoSnapshotRef.current = performance.now();
+          try {
+            const base64 = canvasSimuladoRef.current?.toDataURL('image/jpeg', 0.82);
+            if (base64) onFrameSnapshot(base64);
+          } catch (e) {}
+        }
+
         animId = requestAnimationFrame(render);
       };
       render();
     }
     return () => cancelAnimationFrame(animId);
-  }, [modoSimulado]);
+  }, [modoSimulado, onFrameSnapshot]);
 
   // 7. Apagar Cámara
   const apagarCamara = () => {
@@ -383,7 +805,18 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
     setCamaraActiva(false);
     setRostroDetectado(false);
     if (onCamaraEstadoChange) onCamaraEstadoChange(false);
+    if (onFrameSnapshot) onFrameSnapshot('');
   };
+
+  // Exponer métodos para control directo desde otros componentes (p. ej. Modo Estudio)
+  useImperativeHandle(ref, () => ({
+    encenderCamara: async () => {
+      await encenderCamara();
+    },
+    apagarCamara: () => {
+      apagarCamara();
+    }
+  }));
 
   return (
     <div className="glass-panel rounded-3xl p-6 border border-slate-800 space-y-6">
@@ -416,51 +849,65 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
         )}
       </div>
 
-      {/* Badges de Estado Visual */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-        {camaraActiva ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold">
-              <CheckCircle2 className="w-4 h-4 animate-pulse" /> {modoSimulado ? '🟢 Cámara Simulada Demo' : 'Cámara Web Conectada'} ({resolucionActual})
-            </span>
-            {!modoSimulado && (
-              <span className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold ${
-                rostroDetectado
-                  ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
-                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-              }`}>
-                <UserCheck className="w-3.5 h-3.5" /> {rostroDetectado ? `Rostro Detectado (EAR: ${earActualVisual})` : 'Buscando Rostro...'}
+      {/* Barra de Estado Exterior Fija (Sin saltos de línea ni parpadeo) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs items-center">
+        {/* Columna Izquierda: Badges de Estado */}
+        <div className="flex flex-wrap items-center gap-2">
+          {camaraActiva ? (
+            <>
+              <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-semibold whitespace-nowrap">
+                <CheckCircle2 className="w-4 h-4 animate-pulse" /> {modoSimulado ? '🟢 Cámara Simulada Demo' : 'Cámara Web Conectada'} ({resolucionActual})
               </span>
-            )}
-          </div>
-        ) : errorCamara ? (
-          <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/30 font-semibold max-w-full">
-            <AlertTriangle className="w-4 h-4 shrink-0" /> {errorCamara}
-          </span>
-        ) : cargandoPermiso ? (
-          <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold">
-            <RefreshCw className="w-4 h-4 animate-spin" /> Intentando Conectar Cámara... (Probando resolución)
-          </span>
-        ) : (
-          <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-semibold">
-            <CameraOff className="w-4 h-4" /> Cámara Apagada (OFF-LINE)
-          </span>
-        )}
+              {!modoSimulado && (
+                <>
+                  <span className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold whitespace-nowrap transition-colors duration-200 ${
+                    rostroDetectado
+                      ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
+                      : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                  }`}>
+                    <UserCheck className="w-3.5 h-3.5" />
+                    {rostroDetectado ? `Rostro (EAR: ${earActualVisual.toFixed(3)} | MAR: ${marActualVisual.toFixed(2)})` : 'Buscando Rostro...'}
+                  </span>
+                  {alertaVisualActiva && (
+                    <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 text-xs font-bold animate-pulse whitespace-nowrap">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-400" />
+                      {alertaVisualActiva}
+                    </span>
+                  )}
+                </>
+              )}
+            </>
+          ) : errorCamara ? (
+            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/30 font-semibold max-w-full">
+              <AlertTriangle className="w-4 h-4 shrink-0" /> {errorCamara}
+            </span>
+          ) : cargandoPermiso ? (
+            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 font-semibold">
+              <RefreshCw className="w-4 h-4 animate-spin" /> Intentando Conectar Cámara...
+            </span>
+          ) : (
+            <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 font-semibold">
+              <CameraOff className="w-4 h-4" /> Cámara Apagada (OFF-LINE)
+            </span>
+          )}
+        </div>
 
-        {/* Toggle Malla Facial */}
-        {camaraActiva && !modoSimulado && (
-          <button
-            onClick={() => setMostrarMallaFacial(!mostrarMallaFacial)}
-            className={`px-3 py-1 rounded-full text-[11px] font-bold border transition flex items-center gap-1.5 ${
-              mostrarMallaFacial
-                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
-                : 'bg-slate-800 text-slate-400 border-slate-700'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
-            {mostrarMallaFacial ? 'Malla Facial Ojos Activa' : 'Malla Facial Oculta'}
-          </button>
-        )}
+        {/* Columna Derecha: Botón Toggle Malla Facial siempre alineado a la derecha */}
+        <div className="flex justify-start md:justify-end">
+          {camaraActiva && !modoSimulado && (
+            <button
+              onClick={() => setMostrarMallaFacial(!mostrarMallaFacial)}
+              className={`px-3 py-1 rounded-full text-[11px] font-bold border transition flex items-center gap-1.5 whitespace-nowrap ${
+                mostrarMallaFacial
+                  ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+              {mostrarMallaFacial ? 'Biomarcadores y Postura Activos' : 'Biomarcadores Ocultos'}
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Recuadro de Previsualización HTML5 <video> / <canvas> */}
@@ -476,11 +923,9 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
           className={`w-full h-full object-cover transition-opacity duration-300 ${camaraActiva && !modoSimulado ? 'block opacity-100 z-10' : 'hidden opacity-0'}`}
         />
 
-        {/* Canvas Overlay para superponer los landmarks MediaPipe en vivo */}
+        {/* Canvas Overlay 1:1 sincronizado pixel a pixel con el video */}
         <canvas
           ref={canvasOverlayRef}
-          width={640}
-          height={360}
           className={`absolute inset-0 w-full h-full object-cover pointer-events-none z-20 ${camaraActiva && !modoSimulado ? 'block' : 'hidden'}`}
         />
 
@@ -491,6 +936,23 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
           height={360}
           className={`w-full h-full object-cover ${modoSimulado ? 'block z-10' : 'hidden'}`}
         />
+
+        {/* Indicador reactivo de Privacidad activo en vivo */}
+        {camaraActiva && (
+          <div className="absolute top-3 left-3 z-30 px-3 py-1.5 rounded-xl backdrop-blur-md border text-[10px] font-bold flex items-center gap-2 shadow-xl bg-slate-950/85">
+            {modoProtegido ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                <span className="text-emerald-300">🛡️ Privacidad: Malla 3D Anonimizada</span>
+              </>
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
+                <span className="text-amber-300">📷 Privacidad: Rostro Real Auditado</span>
+              </>
+            )}
+          </div>
+        )}
 
         {!camaraActiva && (
           <div className="text-center space-y-3 p-6 z-0">
@@ -530,5 +992,7 @@ export const PrevisualizadorCamara: React.FC<PrevisualizadorCamaraProps> = ({
 
     </div>
   );
-};
+});
+
+PrevisualizadorCamara.displayName = 'PrevisualizadorCamara';
 

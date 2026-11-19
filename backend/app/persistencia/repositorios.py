@@ -1,7 +1,7 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from app.persistencia.config_db import engine, Base, AsyncSessionLocal
-from app.persistencia.modelos_orm import Usuario, Estudiante, RolUsuario
+from app.persistencia.modelos_orm import Usuario, Estudiante, RolUsuario, SubtipoTDAH
 from app.autenticacion_rbac.seguridad import get_password_hash
 
 
@@ -50,6 +50,7 @@ async def init_db_and_seed():
                 nombre_completo="Mateo Morales Villalobos",
                 edad=14,
                 grado_escolar="3º de Secundaria",
+                subtipo_tdah=SubtipoTDAH.F90_2,
                 diagnostico_observacion="Estudiante con TDAH leve - Evaluación de atención en laboratorio de computación",
                 id_usuario=user_est.id_usuario
             )
