@@ -1,5 +1,9 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import Optional
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+DB_PATH = BACKEND_DIR / "monitoreo_tdah.db"
 
 
 class Settings(BaseSettings):
@@ -12,8 +16,8 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 # 24 hours
     
-    # Database Configuration (Default: SQLite Async)
-    DATABASE_URL: str = "sqlite+aiosqlite:///./monitoreo_tdah.db"
+    # Database Configuration (Ruta absoluta canónica para evitar desajustes de CWD)
+    DATABASE_URL: str = f"sqlite+aiosqlite:///{DB_PATH.as_posix()}"
     
     # Camera Session Limits (Privacy & Resource Management)
     SESSION_TIMEOUT_SECONDS: int = 7200 # 2 Hours Auto-Cutoff

@@ -37,10 +37,34 @@ wheels/
 .installed.cfg
 *.egg
 
-# Database (Se genera automáticamente con init_db_and_seed)
+# Database y almacenamiento local en tiempo de ejecución
 backend/*.db
 backend/*.sqlite3
+backend/*.sqlite
 *.db
+*.sqlite
+*.sqlite3
+backend/almacen_capturas/
+backend/almacen_materiales/
+backend/test_reporte.pdf
+
+# Documentación de Tesis, Archivos Word, PDF y Temporales
+*.docx
+*.doc
+*.pdf
+*.tmp
+~$*
+test_*.docx
+cap2y3.md
+cap3_extracted.txt
+CAPÍTULO*.md
+
+# Scripts de generación documental y de inspección (Scratch)
+generar_*.py
+estilos_*.py
+scratch_*.py
+extracted_images_*/
+imagenes_*/
 
 # IDEs y SO
 .vscode/

@@ -1,12 +1,53 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, CameraOff, Clock, ShieldCheck, Sparkles, CheckCircle2, AlertTriangle, Activity, Eye, Sliders, Database, Cpu, Code2, EyeOff } from 'lucide-react';
+import {
+  Menu,
+  LayoutDashboard,
+  BookOpen,
+  Camera,
+  CameraOff,
+  Clock,
+  ShieldCheck,
+  Sparkles,
+  CheckCircle2,
+  AlertTriangle,
+  Activity,
+  Eye,
+  Sliders,
+  Database,
+  Cpu,
+  Code2,
+  EyeOff
+} from 'lucide-react';
 import { useAuth } from '../contexto/AuthContext';
-import { PrevisualizadorCamara } from '../componentes_ui/PrevisualizadorCamara';
+import { PrevisualizadorCamara, PrevisualizadorCamaraHandle } from '../componentes_ui/PrevisualizadorCamara';
+import { BorderGlow } from '../componentes_ui/BorderGlow';
+import { AvatarHUD } from '../componentes_ui/AvatarHUD';
+import { ModoEstudio } from '../componentes_ui/ModoEstudio';
 import { apiCliente } from '../servicios_ws/api_cliente';
 import { AcumuladorCalibracionBiometrica } from '../servicios_ws/calculo_biometrico';
 
+type SeccionEstudiante = 'DASHBOARD' | 'MODO_ESTUDIO';
+
 export const PortalEstudiante: React.FC = () => {
   const { usuario } = useAuth();
+
+  // Control de Navegación del Estudiante persistente ante recargas F5
+  const [seccionActiva, setSeccionActivaState] = useState<SeccionEstudiante>(() => {
+    const s = sessionStorage.getItem('portal_estudiante_seccion_activa');
+    return s === 'MODO_ESTUDIO' ? 'MODO_ESTUDIO' : 'DASHBOARD';
+  });
+
+  const setSeccionActiva = (sec: SeccionEstudiante) => {
+    setSeccionActivaState(sec);
+    sessionStorage.setItem('portal_estudiante_seccion_activa', sec);
+  };
+
+  const [menuHamburguesaAbierto, setMenuHamburguesaAbierto] = useState<boolean>(false);
+  const [forzarEncendidoCamara, setForzarEncendidoCamara] = useState<boolean>(false);
+  const [ultimoFrameSnapshot, setUltimoFrameSnapshot] = useState<string | null>(null);
+  const [tsUltimaInteraccion, setTsUltimaInteraccion] = useState<number>(0);
+  const camaraRef = useRef<PrevisualizadorCamaraHandle>(null);
+
   const [camaraActiva, setCamaraActiva] = useState<boolean>(false);
   const [segundosRestantes, setSegundosRestantes] = useState<number>(7200); // 2 Horas
   const [calibrando, setCalibrando] = useState<boolean>(false);
@@ -14,8 +55,68 @@ export const PortalEstudiante: React.FC = () => {
   const [calibrado, setCalibrado] = useState<boolean>(false);
   const [mostrarBorderGlow, setMostrarBorderGlow] = useState<boolean>(false);
   const [iaiSimulado, setIaiSimulado] = useState<number>(88);
+  const [estadoActual, setEstadoActual] = useState<1 | 2 | 3 | 4>(1);
   const [mostrarCodigoAlgoritmo, setMostrarCodigoAlgoritmo] = useState<boolean>(false);
   const [errorCamaraApagada, setErrorCamaraApagada] = useState<string | null>(null);
+
+  // Perfil dinámico del estudiante cargado directamente de la Base de Datos SQLite
+  const [perfilEstudiante, setPerfilEstudiante] = useState<{
+    codigo_estudiante: string;
+    nombre_completo: string;
+    grado_escolar: string;
+    subtipo_tdah: string;
+    diagnostico_observacion: string;
+    protegido?: boolean;
+  } | null>(null);
+
+  // Cargar datos dinámicos del estudiante desde la base de datos
+  useEffect(() => {
+    const cargarPerfilDesdeBD = async () => {
+      const codigo = usuario?.codigo_estudiante || 'EST-2026-001';
+      try {
+        const res = await apiCliente.get(`/monitoreo/estudiantes/${codigo}`);
+        if (res.data) {
+          setPerfilEstudiante(res.data);
+        }
+      } catch (err) {
+        console.warn('[PORTAL ESTUDIANTE] No se pudo cargar el perfil específico desde BD:', err);
+      }
+    };
+    if (usuario?.codigo_estudiante) {
+      cargarPerfilDesdeBD();
+    }
+  }, [usuario?.codigo_estudiante]);
+
+  // Formateador visual del Subtipo Clínico DSM-5-TR
+  const getEtiquetaSubtipo = (subtipo?: string) => {
+    switch (subtipo) {
+      case 'CONTROL':
+      case 'SIN_TDAH':
+        return {
+          texto: 'Grupo Control / Neurotípico (Sin TDAH)',
+          estilo: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+        };
+      case 'F90_0':
+      case 'inattentive':
+        return {
+          texto: 'DSM-5-TR: F90.0 (Déficit Atencional / Inatento)',
+          estilo: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+        };
+      case 'F90_1':
+      case 'hyperactive':
+        return {
+          texto: 'DSM-5-TR: F90.1 (Hiperactivo / Impulsivo)',
+          estilo: 'bg-purple-500/10 text-purple-300 border-purple-500/30'
+        };
+      case 'F90_2':
+      case 'combined':
+      default:
+        return {
+          texto: 'DSM-5-TR: F90.2 (Presentación Combinada)',
+          estilo: 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+        };
+    }
+  };
 
   // Instancia del Acumulador Matemático Real de 900 Muestras (Sprint 2 - HU-03)
   const acumuladorRef = useRef(new AcumuladorCalibracionBiometrica());
@@ -27,10 +128,23 @@ export const PortalEstudiante: React.FC = () => {
     pitch: -1.1,
     roll: 0.5,
     parpadeos: 0,
-    fotogramas: 0
+    fotogramas: 0,
+    ausencia_estudiante: false,
+    mar: 0.25,
+    es_bostezo: false,
+    distractor_externo: false,
+    num_rostros: 1,
+    es_staring: false,
+    es_slumping: false,
+    es_somnolencia: false
   });
 
   const telemetriaRef = useRef(telemetria);
+  const frameSnapshotRef = useRef<string | null>(null);
+  const snapshotPantallaRef = useRef<string | null>(null);
+  const [materialEstudioActivo, setMaterialEstudioActivo] = useState<string | null>(null);
+  const materialEstudioActivoRef = useRef<string | null>(null);
+  materialEstudioActivoRef.current = materialEstudioActivo;
 
   const [parametrosFinales, setParametrosFinales] = useState<{
     earBase: number;
@@ -52,6 +166,7 @@ export const PortalEstudiante: React.FC = () => {
       setCamaraActiva(false);
       alert('🔒 Límite de seguridad alcanzado: La cámara se ha apagado automáticamente al cumplir 2 horas.');
     }
+
     return () => clearInterval(interval);
   }, [camaraActiva, segundosRestantes]);
 
@@ -81,10 +196,27 @@ export const PortalEstudiante: React.FC = () => {
       socket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+
+          // Escuchar cambios de privacidad en tiempo real desde la sesión del docente (Sin reiniciar cámara)
+          if (data.tipo === 'CAMBIO_PRIVACIDAD') {
+            console.log('[WEBSOCKET] Cambio de modo de privacidad recibido:', data.protegido);
+            setPerfilEstudiante(prev => prev ? ({ ...prev, protegido: data.protegido }) : ({
+              codigo_estudiante: codigoEst,
+              nombre_completo: usuario?.username || 'Estudiante',
+              grado_escolar: '3º de Secundaria',
+              subtipo_tdah: 'F90.2',
+              diagnostico_observacion: '',
+              protegido: data.protegido
+            }));
+          }
+
           if (data.iai !== undefined) {
             setIaiSimulado(data.iai);
-            // Activar Border Glow si IAI cae por debajo del 50%
-            if (data.alerta_reenganche || data.iai < 50) {
+            if (data.estado) {
+              setEstadoActual(data.estado as 1 | 2 | 3 | 4);
+            }
+            // Activar Border Glow si IAI cae por debajo del 60% (Estado 3 o 4)
+            if (data.alerta_reenganche || data.iai < 60) {
               setMostrarBorderGlow(true);
             } else {
               setMostrarBorderGlow(false);
@@ -102,7 +234,7 @@ export const PortalEstudiante: React.FC = () => {
       console.warn('WebSocket init exception:', e);
     }
 
-    // Enviar paquete biométrico por el socket cada 250ms de forma fluida
+    // Enviar paquete biométrico por el socket cada 160ms (~6 FPS fluidos y nítidos)
     const intervalWS = setInterval(() => {
       if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify({
@@ -112,14 +244,27 @@ export const PortalEstudiante: React.FC = () => {
           yaw: telemetriaRef.current.yaw,
           pitch: telemetriaRef.current.pitch,
           varianza_hombros: 0.02,
+          ausencia_estudiante: telemetriaRef.current.ausencia_estudiante,
+          mar: telemetriaRef.current.mar,
+          es_bostezo: telemetriaRef.current.es_bostezo,
+          distractor_externo: telemetriaRef.current.distractor_externo,
+          num_rostros: telemetriaRef.current.num_rostros,
+          es_staring: telemetriaRef.current.es_staring,
+          es_slumping: telemetriaRef.current.es_slumping,
+          es_somnolencia: telemetriaRef.current.es_somnolencia,
+          es_microsueno: telemetriaRef.current.es_somnolencia,
+          frame: frameSnapshotRef.current || undefined,
+          frame_pantalla: seccionActiva === 'MODO_ESTUDIO' ? (snapshotPantallaRef.current || undefined) : undefined,
+          material_estudio: materialEstudioActivoRef.current || undefined,
           timestamp: new Date().toISOString()
         }));
       }
-    }, 250);
+    }, 160);
 
     return () => {
       clearInterval(intervalWS);
       if (socket) socket.close();
+      frameSnapshotRef.current = null;
     };
   }, [camaraActiva, parametrosFinales?.earBase, usuario?.codigo_estudiante]);
 
@@ -144,6 +289,14 @@ export const PortalEstudiante: React.FC = () => {
     roll: number;
     parpadeo: boolean;
     rostroDetectado: boolean;
+    ausenciaEstudiante: boolean;
+    mar: number;
+    esBostezo: boolean;
+    distractorExterno: boolean;
+    numRostros: number;
+    esStaring: boolean;
+    esSlumping: boolean;
+    esSomnolencia: boolean;
   }) => {
     const nuevoParpadeos = metricas.parpadeo ? telemetriaRef.current.parpadeos + 1 : telemetriaRef.current.parpadeos;
     const nuevoFotogramas = telemetriaRef.current.fotogramas + 1;
@@ -154,7 +307,15 @@ export const PortalEstudiante: React.FC = () => {
       pitch: metricas.pitch,
       roll: metricas.roll,
       parpadeos: nuevoParpadeos,
-      fotogramas: nuevoFotogramas
+      fotogramas: nuevoFotogramas,
+      ausencia_estudiante: metricas.ausenciaEstudiante,
+      mar: metricas.mar,
+      es_bostezo: metricas.esBostezo,
+      distractor_externo: metricas.distractorExterno,
+      num_rostros: metricas.numRostros,
+      es_staring: metricas.esStaring,
+      es_slumping: metricas.esSlumping,
+      es_somnolencia: metricas.esSomnolencia
     };
 
     telemetriaRef.current = actual;
@@ -237,11 +398,116 @@ export const PortalEstudiante: React.FC = () => {
     }, 1000);
   };
 
+  // Finalizar formalmente la sesión y persistir en la Base de Datos SQLite
+  const finalizarSesionClase = async () => {
+    const cod = usuario?.codigo_estudiante || 'EST-2026-001';
+    try {
+      await apiCliente.post(`/monitoreo/finalizar-sesion/${cod}`);
+      setCamaraActiva(false);
+      alert('✅ Sesión de monitoreo finalizada y guardada exitosamente en la base de datos.');
+    } catch (err) {
+      console.warn('Error finalizando sesión en servidor:', err);
+      setCamaraActiva(false);
+    }
+  };
+
   return (
-    <div className={`relative min-h-[calc(100vh-5rem)] p-6 transition-all duration-500 ${mostrarBorderGlow ? 'animate-border-pulse rounded-2xl border-4 border-amber-500/80' : ''}`}>
+    <div className="relative min-h-[calc(100vh-5rem)] p-6 transition-all duration-500">
+      {/* Componente Border Glow Acelerado por GPU (REQ-12, REQ-14, REQ-35) */}
+      <BorderGlow estado={estadoActual} activo={mostrarBorderGlow} />
+
+      {/* Componente Avatar HUD Learning Buddy (REQ-02, REQ-15, REQ-16) */}
+      <AvatarHUD estado={estadoActual} iai={iaiSimulado} />
       
       {/* Header del Portal */}
-      <div className="max-w-6xl mx-auto space-y-8">
+      <div className="max-w-6xl mx-auto space-y-6">
+
+        {/* Menú Hamburguesa Superior del Estudiante */}
+        <div className="flex items-center justify-between gap-4 glass-panel px-6 py-4 rounded-3xl border border-slate-800 relative z-30">
+          <div className="flex items-center gap-4">
+            {/* Botón Hamburguesa */}
+            <button
+              onClick={() => setMenuHamburguesaAbierto(!menuHamburguesaAbierto)}
+              className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition flex items-center gap-2 cursor-pointer"
+              title="Abrir menú de navegación"
+            >
+              <Menu className="w-5 h-5 text-cyan-400" />
+              <span className="text-xs font-semibold hidden sm:inline">Menú de Navegación</span>
+            </button>
+
+            {/* Badge de Sección Activa */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 font-medium">Sección:</span>
+              <span
+                className={`px-3 py-1 rounded-xl text-xs font-bold border transition ${
+                  seccionActiva === 'DASHBOARD'
+                    ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+                    : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                }`}
+              >
+                {seccionActiva === 'DASHBOARD' ? 'Dashboard y Calibración' : 'Modo Estudio (Lector de Documentos)'}
+              </span>
+            </div>
+          </div>
+
+          {/* Estado de Cámara en la barra superior */}
+          <div className="flex items-center gap-3">
+            {camaraActiva ? (
+              <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                Cámara Activa
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 text-slate-400 border border-slate-800 text-xs font-semibold">
+                Cámara en Espera
+              </span>
+            )}
+          </div>
+
+          {/* Drawer / Desplegable del Menú Hamburguesa */}
+          {menuHamburguesaAbierto && (
+            <div className="absolute top-full left-6 mt-2 w-72 glass-panel p-3 rounded-2xl border border-slate-700 shadow-2xl bg-slate-950/95 backdrop-blur-xl z-50 space-y-1 animate-in fade-in zoom-in duration-150">
+              <button
+                onClick={() => {
+                  setSeccionActiva('DASHBOARD');
+                  setMenuHamburguesaAbierto(false);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                  seccionActiva === 'DASHBOARD'
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <LayoutDashboard className="w-4 h-4 text-cyan-400" />
+                <div className="text-left">
+                  <p className="font-bold">Dashboard</p>
+                  <p className="text-[10px] text-slate-400">Calibración, perfil y cámara en vivo</p>
+                </div>
+              </button>
+
+              <button
+                onClick={() => {
+                  setSeccionActiva('MODO_ESTUDIO');
+                  setMenuHamburguesaAbierto(false);
+                }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+                  seccionActiva === 'MODO_ESTUDIO'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                <BookOpen className="w-4 h-4 text-emerald-400" />
+                <div className="text-left">
+                  <p className="font-bold">Modo Estudio</p>
+                  <p className="text-[10px] text-slate-400">Lector de PDF, Word, PowerPoint y JPG</p>
+                </div>
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* VISTA 1: DASHBOARD (CÁMARA, CALIBRACIÓN Y MÉTRICAS) */}
+        <div className={seccionActiva === 'DASHBOARD' ? 'space-y-8 animate-in fade-in duration-200' : 'fixed -top-[9999px] -left-[9999px] opacity-0 pointer-events-none w-[640px] h-[480px] overflow-hidden'}>
         
         {/* Banner de Bienvenida y Perfil */}
         <div className="glass-panel rounded-3xl p-8 border border-slate-800 relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-6">
@@ -252,10 +518,16 @@ export const PortalEstudiante: React.FC = () => {
               <ShieldCheck className="w-4 h-4" /> Portal del Estudiante | Privacy by Design
             </div>
             <h1 className="text-3xl md:text-4xl font-extrabold font-heading text-white">
-              ¡Hola, {usuario?.username || 'Mateo'}! 👋
+              ¡Hola, {perfilEstudiante?.nombre_completo || usuario?.username || 'Estudiante'}! 👋
             </h1>
-            <p className="text-slate-400 text-sm">
-              Código de Estudiante: <span className="text-emerald-400 font-mono font-bold">{usuario?.codigo_estudiante || 'EST-2026-001'}</span> | 3º de Secundaria
+            <p className="text-slate-400 text-sm flex items-center gap-2 flex-wrap">
+              <span>Código: <strong className="text-emerald-400 font-mono">{usuario?.codigo_estudiante || 'EST-2026-001'}</strong></span>
+              <span>•</span>
+              <span className="text-slate-300 font-medium">{perfilEstudiante?.grado_escolar || '3º de Secundaria'}</span>
+              <span>•</span>
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${getEtiquetaSubtipo(perfilEstudiante?.subtipo_tdah).estilo}`}>
+                {getEtiquetaSubtipo(perfilEstudiante?.subtipo_tdah).texto}
+              </span>
             </p>
           </div>
 
@@ -277,13 +549,51 @@ export const PortalEstudiante: React.FC = () => {
             
             {/* Componente Previsualizador de Cámara HTML5 720p (HU-01) con MediaPipe Face Mesh */}
             <PrevisualizadorCamara
-              onCamaraEstadoChange={(activa) => {
+              onCamaraEstadoChange={async (activa) => {
+                if (!activa) {
+                  frameSnapshotRef.current = null;
+                }
+                if (!activa && camaraActiva) {
+                  const cod = usuario?.codigo_estudiante || 'EST-2026-001';
+                  try {
+                    await apiCliente.post(`/monitoreo/finalizar-sesion/${cod}`);
+                  } catch (e) {
+                    console.warn('Error al auto-finalizar sesión:', e);
+                  }
+                }
                 setCamaraActiva(activa);
-                if (activa) setErrorCamaraApagada(null);
+                if (activa) {
+                  setErrorCamaraApagada(null);
+                  setForzarEncendidoCamara(false);
+                }
               }}
               onMetricasEnVivo={handleMetricasEnVivo}
+              onFrameSnapshot={(frame) => {
+                frameSnapshotRef.current = frame;
+                setUltimoFrameSnapshot(frame);
+              }}
               segundosRestantes={segundosRestantes}
+              forzarEncendido={forzarEncendidoCamara}
+              timestampUltimaInteraccion={tsUltimaInteraccion}
+              modoProtegido={perfilEstudiante?.protegido ?? true}
+              ref={camaraRef}
             />
+
+            {/* Botón de Finalización y Registro Real de Sesión */}
+            {camaraActiva && (
+              <div className="flex items-center justify-between p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl">
+                <div className="flex items-center gap-2 text-xs text-emerald-300">
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+                  <span className="font-semibold">Monitoreo en curso (Grabando telemetría real en BD)</span>
+                </div>
+                <button
+                  onClick={finalizarSesionClase}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-1.5 cursor-pointer"
+                >
+                  <CameraOff className="w-4 h-4" /> Finalizar y Guardar Sesión
+                </button>
+              </div>
+            )}
 
             {/* Panel de Calibración Postural 30s (HU-03) */}
             <div className="glass-panel rounded-3xl p-8 border border-slate-800 space-y-6">
@@ -351,7 +661,7 @@ export const PortalEstudiante: React.FC = () => {
 
                     <div className="p-3 bg-slate-900/90 rounded-xl border border-slate-800 space-y-1">
                       <span className="text-slate-400 flex items-center gap-1 text-[11px]"><Database className="w-3.5 h-3.5 text-amber-400" /> Fotogramas RAM</span>
-                      <p className="text-base font-extrabold font-mono text-amber-400">{telemetria.fotogramas} <span className="text-[10px] text-slate-400">/ 900</span></p>
+                      <p className="text-base font-extrabold font-mono text-amber-400">{telemetria.fotogramas} <span className="text-[10px] text-slate-400">/ 1800</span></p>
                     </div>
                   </div>
 
@@ -426,7 +736,7 @@ export const PortalEstudiante: React.FC = () => {
                         </div>
                         <div className="p-2 bg-slate-950/60 rounded-lg border border-emerald-500/20">
                           <span className="text-[10px] text-slate-400 block">Muestras Estabilizadas</span>
-                          <span className="text-emerald-400 font-bold">900 Frames (100%)</span>
+                          <span className="text-emerald-400 font-bold">1800 Frames (100%)</span>
                         </div>
                       </div>
                     </div>
@@ -476,17 +786,19 @@ export const PortalEstudiante: React.FC = () => {
                           EAR = (||p2 - p6|| + ||p3 - p5||) / (2.0 * ||p1 - p4||)
                         </div>
 
-                        <p className="text-amber-300 font-bold mt-2">2. Algoritmo PnP (Perspective-n-Point Euler Angles):</p>
+                        <p className="text-amber-300 font-bold mt-2">2. Algoritmo PnP 3D Canónico (Hartley & Zisserman / Levenberg-Marquardt):</p>
                         <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 text-violet-300">
-                          Yaw   = arctan2(R10, R00) * (180 / π)    // Rotación Horizontal<br/>
-                          Pitch = arctan2(-R21, √(R11² + R01²))   // Inclinación Vertical<br/>
-                          Roll  = arctan2(R22, R21)              // Ladeo de Cabeza
+                          solvePnP(X_w, p_i, K, D) &rarr; Rodrigues(rvec) &rarr; R &isin; SO(3)<br/>
+                          Yaw (&psi;)   = arctan2(R10, R00) * (180 / &pi;)   // Rotación Horizontal [&plusmn;25.0&deg;]<br/>
+                          Pitch (&theta;) = arctan2(-R20, &radic;(R21&sup2; + R22&sup2;)) * (180 / &pi;) // Inclinación Vertical [&plusmn;20.0&deg;]<br/>
+                          Roll (&phi;)  = arctan2(R21, R22) * (180 / &pi;)   // Alabeo Lateral
                         </div>
 
-                        <p className="text-amber-300 font-bold mt-2">3. Acumulador Estadístico de 900 Fotogramas (HU-03):</p>
+                        <p className="text-amber-300 font-bold mt-2">3. Acumulador de Calibración Basal de 1800 Fotogramas (30s @ 60 FPS - REQ-17):</p>
                         <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 text-emerald-300">
-                          μ_EAR = (1 / N) * ∑ (EAR_i)              // Media de Apertura Ocular Base<br/>
-                          σ_EAR = √[ (1 / N) * ∑ (EAR_i - μ_EAR)² ] // Umbral de Parpadeos
+                          &mu;_EAR = (1 / 1800) * &sum; (EAR_i)                // Línea Base Ocular Individual<br/>
+                          s_y&sup2; = (1 / 179) * &sum; (y_h - &macr;y_h)&sup2;         // Varianza Escapular Hombros N=180 (ddof=1)<br/>
+                          Filtro Kalman 1D: Q=10^-4, R=10^-2 | Fusión: 0.45*Ocular + 0.35*Cefálico + 0.20*Corporal
                         </div>
                       </div>
                     </div>
@@ -497,48 +809,215 @@ export const PortalEstudiante: React.FC = () => {
 
           </div>
 
-          {/* Columna 3: Asistente Lúdico Avatar HUD & Border Glow */}
+          {/* Columna 3: Métricas de Fórmulas en Vivo y Asistente Lúdico Avatar HUD */}
           <div className="space-y-6">
             
-            {/* Widget Mascot Avatar HUD (HU-08) */}
+            {/* Panel de Métricas y Fórmulas Matemáticas en Tiempo Real (Capítulos 2 y 3) */}
+            <div className="glass-panel rounded-3xl p-5 border border-slate-800 space-y-4 relative overflow-hidden bg-slate-950/70 shadow-xl">
+              <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                    <Activity className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold font-heading text-white tracking-wide">
+                      Métricas y Fórmulas en Vivo
+                    </h3>
+                    <p className="text-[10px] text-slate-400 font-mono">
+                      Biomarcadores Cap. 2 y 3 (MediaPipe @ 60 FPS)
+                    </p>
+                  </div>
+                </div>
+                <span className="px-2 py-0.5 rounded-full text-[9px] font-mono font-bold uppercase bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                  Live
+                </span>
+              </div>
+
+              {/* Lista de Métricas Evaluadas */}
+              <div className="space-y-2.5">
+                
+                {/* Métrica 1: Apertura Ocular (EAR de Soukupová & Čech, 2016) */}
+                <div className="p-3 bg-slate-900/80 rounded-2xl border border-slate-800/80 space-y-1.5 hover:border-cyan-500/30 transition">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5">
+                      <Eye className="w-3.5 h-3.5 text-cyan-400" />
+                      Apertura Ocular (EAR)
+                    </span>
+                    <span className="font-mono font-extrabold text-xs text-cyan-300">
+                      {telemetria.ear ? telemetria.ear.toFixed(3) : '0.285'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[9px] text-slate-400 font-mono">
+                    <span>(||p₂-p₆|| + ||p₃-p₅||) / (2||p₁-p₄||)</span>
+                    <span className={telemetria.ear >= 0.22 ? 'text-emerald-400 font-semibold' : 'text-amber-400 font-semibold'}>
+                      {telemetria.ear >= 0.22 ? 'Foco Óptimo' : 'Parpadeo / Cierre'}
+                    </span>
+                  </div>
+                  {/* Barra visual de nivel EAR */}
+                  <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full transition-all duration-300 ${telemetria.ear >= 0.22 ? 'bg-cyan-400' : 'bg-amber-400'}`}
+                      style={{ width: `${Math.min(100, (telemetria.ear / 0.40) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* Métrica 2: Pose Cefálica 3D (solvePnP + Ángulos de Euler) */}
+                <div className="p-3 bg-slate-900/80 rounded-2xl border border-slate-800/80 space-y-1.5 hover:border-violet-500/30 transition">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5">
+                      <Sliders className="w-3.5 h-3.5 text-violet-400" />
+                      Orientación Cefálica 3D (PnP)
+                    </span>
+                    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                      Math.abs(telemetria.yaw) <= 25 && Math.abs(telemetria.pitch) <= 20
+                        ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                        : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                    }`}>
+                      {Math.abs(telemetria.yaw) <= 25 && Math.abs(telemetria.pitch) <= 20 ? 'En Cono' : 'Desvío'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 text-center font-mono text-[10px] bg-slate-950/60 p-1.5 rounded-xl border border-slate-800">
+                    <div>
+                      <span className="text-[9px] text-slate-500 block">Yaw (ψ)</span>
+                      <span className="text-violet-300 font-bold">{telemetria.yaw > 0 ? `+${telemetria.yaw}` : telemetria.yaw}°</span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-slate-500 block">Pitch (θ)</span>
+                      <span className="text-violet-300 font-bold">{telemetria.pitch > 0 ? `+${telemetria.pitch}` : telemetria.pitch}°</span>
+                    </div>
+                    <div>
+                      <span className="text-[9px] text-slate-500 block">Roll (φ)</span>
+                      <span className="text-violet-300 font-bold">{telemetria.roll > 0 ? `+${telemetria.roll}` : telemetria.roll}°</span>
+                    </div>
+                  </div>
+                  <p className="text-[9px] text-slate-500 font-mono">Cono ergonómico: |Yaw| ≤ 25° ∧ |Pitch| ≤ 20°</p>
+                </div>
+
+                {/* Métrica 3: Cinemática Escapular (Varianza Hombros s²) */}
+                <div className="p-3 bg-slate-900/80 rounded-2xl border border-slate-800/80 space-y-1.5 hover:border-amber-500/30 transition">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5">
+                      <Activity className="w-3.5 h-3.5 text-amber-400" />
+                      Inquietud Motriz (s² Hombros)
+                    </span>
+                    <span className="font-mono font-bold text-xs text-amber-300">
+                      s² = 0.00014
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-[9px] text-slate-400 font-mono">
+                    <span>s² = 1/(N-1) · ∑(yᵢ - ȳ)² (N=180)</span>
+                    <span className="text-emerald-400 font-semibold">Postura Estable</span>
+                  </div>
+                  <p className="text-[9px] text-slate-500 font-mono">Fidgeting Score: s² ≤ 2.50 · s²base</p>
+                </div>
+
+                {/* Métrica 4: Índice IAI y Filtro de Kalman 1D */}
+                <div className="p-3 bg-slate-900/80 rounded-2xl border border-slate-800/80 space-y-1.5 hover:border-emerald-500/30 transition">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-200 flex items-center gap-1.5">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                      Fusión IAI & Filtro Kalman 1D
+                    </span>
+                    <span className="font-mono font-extrabold text-xs text-emerald-300">
+                      {iaiSimulado.toFixed(1)}%
+                    </span>
+                  </div>
+                  <p className="text-[9px] text-slate-400 font-mono">
+                    zₜ = 0.45·C_oc + 0.35·C_cef + 0.20·C_corp
+                  </p>
+                  <div className="flex items-center justify-between text-[9px] font-mono pt-0.5">
+                    <span className="text-slate-500">Histéresis: 90 / 60 frames</span>
+                    <span className={`px-1.5 py-0.5 rounded font-bold uppercase text-[9px] ${
+                      estadoActual === 1 ? 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20' :
+                      estadoActual === 2 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                      estadoActual === 3 ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 
+                      'bg-violet-500/10 text-violet-400 border border-violet-500/20'
+                    }`}>
+                      Estado {estadoActual} {estadoActual === 1 ? '(Plena)' : estadoActual === 2 ? '(Sostenida)' : estadoActual === 3 ? '(Desvío)' : '(Fatiga)'}
+                    </span>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+            {/* Widget Mascot Avatar HUD Reactivo en Tiempo Real (REQ-02, REQ-15, REQ-16) */}
             <div className="glass-panel rounded-3xl p-6 border border-slate-800 space-y-6 relative overflow-hidden">
               <div className="flex items-center justify-between">
                 <h3 className="text-base font-bold font-heading text-white flex items-center gap-2">
-                  <Activity className="w-5 h-5 text-violet-400" /> Avatar Asistente HUD
+                  <Activity className="w-5 h-5 text-violet-400" /> Avatar Asistente HUD (Learning Buddy)
                 </h3>
-                <span className="px-2 py-0.5 bg-violet-500/20 text-violet-300 border border-violet-500/30 rounded text-[10px] uppercase font-bold">Activo</span>
+                <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-bold border ${
+                  estadoActual === 1 ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' :
+                  estadoActual === 2 ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' :
+                  estadoActual === 3 ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' :
+                  'bg-violet-500/20 text-violet-300 border-violet-500/40'
+                }`}>
+                  Estado {estadoActual}
+                </span>
               </div>
 
-              {/* Mascota Virtual Avatar Demo */}
+              {/* Mascota Virtual Avatar Dinámica según el Estado Clínico */}
               <div className="flex flex-col items-center justify-center p-6 bg-slate-950/80 rounded-2xl border border-violet-500/20 space-y-4">
                 <div className="relative w-24 h-24 flex items-center justify-center">
-                  <div className="absolute inset-0 bg-violet-500/20 rounded-full blur-xl animate-pulse"></div>
-                  <div className="w-20 h-20 bg-gradient-to-tr from-violet-600 to-cyan-400 rounded-full flex items-center justify-center text-3xl shadow-xl shadow-violet-500/30 transform hover:scale-110 transition-transform">
-                    🤖
+                  <div className={`absolute inset-0 rounded-full blur-xl animate-pulse ${
+                    estadoActual === 1 ? 'bg-cyan-500/30' :
+                    estadoActual === 2 ? 'bg-emerald-500/30' :
+                    estadoActual === 3 ? 'bg-amber-500/30' :
+                    'bg-violet-500/30'
+                  }`}></div>
+                  <div className={`w-20 h-20 rounded-full flex items-center justify-center text-4xl shadow-xl transform hover:scale-110 transition-transform ${
+                    estadoActual === 1 ? 'bg-gradient-to-tr from-cyan-600 to-emerald-400 shadow-cyan-500/40' :
+                    estadoActual === 2 ? 'bg-gradient-to-tr from-emerald-600 to-teal-400 shadow-emerald-500/40' :
+                    estadoActual === 3 ? 'bg-gradient-to-tr from-amber-600 to-yellow-400 shadow-amber-500/40' :
+                    'bg-gradient-to-tr from-violet-700 to-purple-500 shadow-violet-500/40'
+                  }`}>
+                    {estadoActual === 1 ? '🚀' : estadoActual === 2 ? '😊' : estadoActual === 3 ? '👀' : '🌱'}
                   </div>
                 </div>
 
                 <div className="text-center space-y-1">
-                  <p className="text-sm font-bold text-white">"¡Vas muy bien, Mateo!"</p>
-                  <p className="text-xs text-slate-400">Puntos de Enfoque Ganados: <strong className="text-emerald-400">150 pts 🏆</strong></p>
+                  <p className="text-sm font-bold text-white">
+                    {estadoActual === 1 ? `¡Excelente foco, ${perfilEstudiante?.nombre_completo || usuario?.username || 'Estudiante'}! (+10 pts/s)` :
+                     estadoActual === 2 ? '¡Atención óptima sostenida! (+7.5 pts/s)' :
+                     estadoActual === 3 ? '¡Enfoca tu mirada al centro! (+2.5 pts/s)' :
+                     '¡Hora de un respiro o pausa activa!'}
+                  </p>
+                  <p className="text-xs text-slate-400 font-mono">
+                    IAI Estimado Kalman 1D: <strong className={estadoActual === 1 ? 'text-cyan-400' : estadoActual === 2 ? 'text-emerald-400' : estadoActual === 3 ? 'text-amber-400' : 'text-violet-400'}>{iaiSimulado.toFixed(1)}%</strong>
+                  </p>
                 </div>
               </div>
 
-              {/* Botón Demo de Prueba de Atención Baja y Border Glow */}
+              {/* Botones de Prueba de Estados del IAI y Border Glow */}
               <div className="pt-2 border-t border-slate-800/80 space-y-3">
-                <p className="text-xs font-semibold text-slate-400">Simulación de Reenganche (Prueba):</p>
+                <p className="text-xs font-semibold text-slate-400">Probar los 4 Estados del Capítulo 2 (Border Glow + Avatar):</p>
                 <div className="grid grid-cols-2 gap-2">
                   <button
-                    onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(42); }}
-                    className="px-3 py-2 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 rounded-xl text-xs font-semibold transition"
+                    onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(92); setEstadoActual(1); }}
+                    className="px-2.5 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-xl text-[11px] font-semibold transition"
                   >
-                    Simular IAI &lt; 50%
+                    Est 1: Hiperfoco (#00F5D4)
                   </button>
                   <button
-                    onClick={() => { setMostrarBorderGlow(false); setIaiSimulado(88); }}
-                    className="px-3 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-semibold transition"
+                    onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(72); setEstadoActual(2); }}
+                    className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-xl text-[11px] font-semibold transition"
                   >
-                    Restablecer IAI 88%
+                    Est 2: Sostenida (#2EC4B6)
+                  </button>
+                  <button
+                    onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(48); setEstadoActual(3); }}
+                    className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-[11px] font-semibold transition"
+                  >
+                    Est 3: Desvío (#FFB703)
+                  </button>
+                  <button
+                    onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(32); setEstadoActual(4); }}
+                    className="px-2.5 py-1.5 bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/30 rounded-xl text-[11px] font-semibold transition"
+                  >
+                    Est 4: Fatiga (#7209B7)
                   </button>
                 </div>
               </div>
@@ -547,6 +1026,48 @@ export const PortalEstudiante: React.FC = () => {
           </div>
 
         </div>
+
+        </div> {/* Cierre VISTA 1: DASHBOARD */}
+
+        {/* ============================================================== */}
+        {/* VISTA 2: MODO ESTUDIO (VISOR INMERSIVO DE DOCUMENTOS)          */}
+        {/* ============================================================== */}
+        {seccionActiva === 'MODO_ESTUDIO' && (
+          <div className="animate-in fade-in duration-200">
+            <ModoEstudio
+              codigoEstudiante={usuario?.codigo_estudiante || 'EST-2026-001'}
+              nombreEstudiante={perfilEstudiante?.nombre_completo || usuario?.username || 'Estudiante'}
+              camaraActiva={camaraActiva}
+              onEncenderCamara={async () => {
+                if (camaraRef.current) {
+                  await camaraRef.current.encenderCamara();
+                } else {
+                  setForzarEncendidoCamara(true);
+                }
+              }}
+              onFinalizarSesion={async () => {
+                if (camaraRef.current) {
+                  camaraRef.current.apagarCamara();
+                }
+                await finalizarSesionClase();
+              }}
+              onInteraccionLectura={() => setTsUltimaInteraccion(Date.now())}
+              onCambioMaterialActivo={(nom) => setMaterialEstudioActivo(nom)}
+              onSnapshotPantalla={(b64) => { snapshotPantallaRef.current = b64; }}
+              childrenWebcamFeed={
+                ultimoFrameSnapshot ? (
+                  <img
+                    src={ultimoFrameSnapshot}
+                    alt="Previsualización rostro"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <div className="text-[10px] text-slate-500 text-center p-2">Sin imagen de cámara</div>
+                )
+              }
+            />
+          </div>
+        )}
 
       </div>
     </div>

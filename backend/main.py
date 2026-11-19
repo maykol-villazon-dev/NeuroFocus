@@ -7,6 +7,8 @@ from app.persistencia.repositorios import init_db_and_seed
 from app.autenticacion_rbac.rutas_auth import router as auth_router
 from app.servicios.rutas_monitoreo import router as monitoreo_router
 from app.servicios.rutas_websockets import router as ws_router
+from app.servicios.rutas_reportes import router as reportes_router
+from app.servicios.rutas_materiales import router as materiales_router
 
 
 @asynccontextmanager
@@ -39,6 +41,8 @@ app.add_middleware(
 # Registrar Routers
 app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(monitoreo_router, prefix=settings.API_V1_STR)
+app.include_router(reportes_router, prefix=settings.API_V1_STR)
+app.include_router(materiales_router, prefix=settings.API_V1_STR)
 app.include_router(ws_router)
 
 
