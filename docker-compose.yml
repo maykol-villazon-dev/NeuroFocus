@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: always
+    environment:
+      - SECRET_KEY=super-secreto-neurofocus-produccion-2026-azure-token-jwt
+      - ALGORITHM=HS256
+      - ACCESS_TOKEN_EXPIRE_MINUTES=43200
+      - ENVIRONMENT=production
+    volumes:
+      - ./backend/almacen_capturas:/app/almacen_capturas
+      - ./backend/almacen_materiales:/app/almacen_materiales
+      - ./backend/monitoreo_tdah.db:/app/monitoreo_tdah.db
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
