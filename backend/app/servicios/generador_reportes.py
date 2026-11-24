@@ -121,6 +121,7 @@ def generar_pdf_reporte_psicopedagogico(
     qr_drawing.add(qr_widget)
 
     # 3. ENCABEZADO INSTITUCIONAL CON QR EMBEBIDO
+    estado_texto = "EVALUACIÓN COMPLETADA" if tiene_evaluacion else "<font color='#B45309'>SIN SESIÓN REGISTRADA</font>"
     header_data = [
         [
             Paragraph("<b>NEUROFOCUS AI</b> &mdash; <i>Gabinete Psicopedagógico</i><br/>"
@@ -128,7 +129,7 @@ def generar_pdf_reporte_psicopedagogico(
             qr_drawing,
             Paragraph(f"<b>FECHA EMISIÓN:</b> {ahora_bolivia().strftime('%d/%m/%Y %H:%M')}<br/>"
                       f"<b>ID SESIÓN:</b> {str(id_sesion)[:14]}...<br/>"
-                      f"<b>ESTADO:</b> {('EVALUACIÓN COMPLETADA' if tiene_evaluacion else '<font color=\"#B45309\">SIN SESIÓN REGISTRADA</font>')}", ParagraphStyle('HR', parent=body_style, alignment=2, fontSize=7.5, leading=9.5))
+                      f"<b>ESTADO:</b> {estado_texto}", ParagraphStyle('HR', parent=body_style, alignment=2, fontSize=7.5, leading=9.5))
         ]
     ]
     header_table = Table(header_data, colWidths=[330, 65, 145])
