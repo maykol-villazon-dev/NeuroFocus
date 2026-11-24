@@ -108,8 +108,12 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
     obtenerDispositivos();
   }, []);
 
-  // 2. Inicializar Google MediaPipe Face Mesh
+  // 2. Inicializar Google MediaPipe Face Mesh con Reintentos Robustos (WASM CDN)
   useEffect(() => {
+    let timerId: any = null;
+    let intentos = 0;
+    const maxIntentos = 40; // Reintentar durante ~12 segundos hasta que los scripts de jsdelivr terminen de cargar
+
     const initFaceMesh = () => {
       try {
         if ((window as any).FaceMesh) {
@@ -126,16 +130,27 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
 
           fm.onResults(handleMediaPipeResults);
           faceMeshRef.current = fm;
-          console.log('[MEDIAPIPE] Google Face Mesh inicializado con éxito.');
+          console.log('[MEDIAPIPE] Google Face Mesh inicializado con éxito tras', intentos, 'intentos.');
+          return true;
         } else {
-          console.warn('[MEDIAPIPE] FaceMesh CDN aún no disponible en window.');
+          intentos++;
+          if (intentos < maxIntentos) {
+            timerId = setTimeout(initFaceMesh, 300);
+          } else {
+            console.warn('[MEDIAPIPE] FaceMesh CDN no disponible tras tiempo límite de espera.');
+          }
         }
       } catch (err) {
         console.warn('[MEDIAPIPE INIT ERROR]:', err);
       }
+      return false;
     };
 
     initFaceMesh();
+
+    return () => {
+      if (timerId) clearTimeout(timerId);
+    };
   }, []);
 
   // 3. Manejador de Resultados de MediaPipe en Tiempo Real

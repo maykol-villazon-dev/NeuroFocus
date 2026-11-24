@@ -566,6 +566,7 @@ export const DashboardAutoridades: React.FC = () => {
 
   // Seleccionar estudiante desde la lista o selector
   const seleccionarEstudiante = (est: EstudianteItem) => {
+    sessionStorage.setItem('dashboard_codigo_estudiante', est.codigo_estudiante);
     setEstudianteActivo(est);
     setCodigoBusqueda(est.codigo_estudiante);
     setEstudianteEncontrado(true);
@@ -595,6 +596,7 @@ export const DashboardAutoridades: React.FC = () => {
     // 1. Buscar en la lista local en memoria si ya fue cargada
     const localMatch = estudiantes.find(e => e.codigo_estudiante === codigoLimpio);
     if (localMatch) {
+      sessionStorage.setItem('dashboard_codigo_estudiante', localMatch.codigo_estudiante);
       setEstudianteActivo(localMatch);
       setEstudianteEncontrado(true);
       return;
@@ -603,6 +605,7 @@ export const DashboardAutoridades: React.FC = () => {
     // 2. Si no está en memoria, consultar endpoint específico
     try {
       const resp = await apiCliente.get(`/monitoreo/estudiantes/${codigoLimpio}`);
+      sessionStorage.setItem('dashboard_codigo_estudiante', resp.data.codigo_estudiante);
       setEstudianteActivo(resp.data);
       setEstudianteEncontrado(true);
     } catch (err) {
