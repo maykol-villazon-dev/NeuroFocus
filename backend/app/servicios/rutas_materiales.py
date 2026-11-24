@@ -333,7 +333,12 @@ async def eliminar_material_curso(
         raise HTTPException(status_code=404, detail="Material no encontrado.")
 
     rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
-    if rol_str != "SUPERADMIN" and mat.id_docente != usuario_actual.id_usuario:
+    permisos = await obtener_permisos_usuario(usuario_actual, db)
+    es_autor = (mat.id_docente == usuario_actual.id_usuario)
+    es_admin = (rol_str in ["SUPERADMIN", "DIRECTOR"])
+    tiene_permiso = ("GESTIONAR_MATERIALES_CLASE" in permisos)
+
+    if not (es_autor or es_admin or tiene_permiso):
         raise HTTPException(status_code=403, detail="No tiene autorización para eliminar este material.")
 
     # Eliminar archivo PDF del disco si existe
