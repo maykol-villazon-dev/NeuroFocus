@@ -3,9 +3,12 @@ import {
   Search, Eye, UserCheck, Activity, Download, AlertCircle, FileText, 
   CheckCircle2, Sliders, Layers, Radio, Sparkles, Menu, X, 
   LayoutDashboard, Users, RefreshCw, ChevronRight, Clock, ShieldCheck, Edit3, Save,
-  Camera, CameraOff, Video
+  Camera, CameraOff, Video, BookOpen, ChevronDown, ChevronUp, Upload, Trash2,
+  ExternalLink, Plus, FolderOpen, LogOut
 } from 'lucide-react';
 import { useAuth } from '../contexto/AuthContext';
+import { apiCliente } from '../servicios_ws/api_cliente';
+import { ModalNotificacion, ModalNotificacionConfig } from '../componentes_ui/ModalNotificacion';
 
 interface EstudianteItem {
   id_estudiante: string;
@@ -54,21 +57,55 @@ export interface SesionBitacoraItem {
   url_pdf: string;
 }
 
-type SeccionMenu = 'DASHBOARD' | 'ESTUDIANTES' | 'HISTORIAL';
+export interface CursoDocenteItem {
+  id_curso: string;
+  nombre_curso: string;
+  nivel_academico: string;
+  descripcion?: string;
+  total_materiales: number;
+}
+
+export interface MaterialCursoItem {
+  id_material: string;
+  titulo: string;
+  descripcion_tarea?: string;
+  nombre_archivo_original: string;
+  nombre_pdf: string;
+  url_pdf: string;
+  tamano_kb: number;
+  fecha_subida: string;
+  docente_nombre: string;
+  id_docente: string;
+  es_propietario: boolean;
+}
+
+type SeccionMenu = 'DASHBOARD' | 'ESTUDIANTES' | 'HISTORIAL' | 'CURSO_DOCENTE';
 
 export const DashboardAutoridades: React.FC = () => {
-  const { usuario } = useAuth();
+  const { usuario, tienePermiso, logout } = useAuth();
+  const [desplegableCursosLateral, setDesplegableCursosLateral] = useState<boolean>(true);
+  const [sidebarMobileAbierta, setSidebarMobileAbierta] = useState<boolean>(false);
   
   // Control de Navegación persistente ante recargas F5
   const [seccionActiva, setSeccionActivaState] = useState<SeccionMenu>(() => {
     const s = sessionStorage.getItem('dashboard_seccion_activa');
-    return (s === 'DASHBOARD' || s === 'ESTUDIANTES' || s === 'HISTORIAL') ? s : 'DASHBOARD';
+    return (s === 'DASHBOARD' || s === 'ESTUDIANTES' || s === 'HISTORIAL' || s === 'CURSO_DOCENTE') ? s : 'DASHBOARD';
   });
 
   const setSeccionActiva = (sec: SeccionMenu) => {
     setSeccionActivaState(sec);
     sessionStorage.setItem('dashboard_seccion_activa', sec);
   };
+
+  // Revalidar acceso a secciones si los permisos no autorizan la vista
+  useEffect(() => {
+    if (seccionActiva === 'HISTORIAL' && !tienePermiso('VER_HISTORIAL_REPORTES')) {
+      setSeccionActiva('DASHBOARD');
+    }
+    if (seccionActiva === 'ESTUDIANTES' && !tienePermiso('VER_TODOS_ESTUDIANTES') && !tienePermiso('VER_ESTUDIANTES_ASIGNADOS')) {
+      setSeccionActiva('DASHBOARD');
+    }
+  }, [seccionActiva, tienePermiso]);
 
   const [menuHamburguesaAbierto, setMenuHamburguesaAbierto] = useState<boolean>(false);
 
@@ -80,6 +117,55 @@ export const DashboardAutoridades: React.FC = () => {
   // Historial de Reportes PDF
   const [historialReportes, setHistorialReportes] = useState<ReporteItem[]>([]);
   const [cargandoHistorial, setCargandoHistorial] = useState<boolean>(false);
+
+  // Estados de Cursos y Materiales Escolares del Docente
+  const [misCursos, setMisCursos] = useState<CursoDocenteItem[]>([]);
+  const [cursoActivo, setCursoActivo] = useState<CursoDocenteItem | null>(null);
+  const [materialesCurso, setMaterialesCurso] = useState<MaterialCursoItem[]>([]);
+  const [cargandoMateriales, setCargandoMateriales] = useState<boolean>(false);
+  const [desplegableCursosDesktop, setDesplegableCursosDesktop] = useState<boolean>(false);
+  const [desplegableCursosMobile, setDesplegableCursosMobile] = useState<boolean>(false);
+
+  // Formulario de Subida de Material
+  const [formNuevoMaterial, setFormNuevoMaterial] = useState<{
+    titulo: string;
+    descripcion_tarea: string;
+    archivo: File | null;
+  }>({
+    titulo: '',
+    descripcion_tarea: '',
+    archivo: null
+  });
+  const [subiendoMaterial, setSubiendoMaterial] = useState<boolean>(false);
+
+  // Modal para Editar Material (Título, Descripción de Tarea, Reemplazo de Archivo)
+  const [modalEditarMaterial, setModalEditarMaterial] = useState<{
+    abierto: boolean;
+    material: MaterialCursoItem | null;
+    titulo: string;
+    descripcion_tarea: string;
+    nuevoArchivo: File | null;
+  }>({
+    abierto: false,
+    material: null,
+    titulo: '',
+    descripcion_tarea: '',
+    nuevoArchivo: null
+  });
+  const [guardandoEdicionMaterial, setGuardandoEdicionMaterial] = useState<boolean>(false);
+
+  // Modal para Visualizar PDF en Modo Docente
+  const [modalVisualizarPdf, setModalVisualizarPdf] = useState<{
+    abierto: boolean;
+    url: string;
+    titulo: string;
+    descripcion: string;
+  }>({
+    abierto: false,
+    url: '',
+    titulo: '',
+    descripcion: ''
+  });
 
   // Código de Estudiante persistente ante recargas F5 (sin valores quemados)
   const [codigoBusqueda, setCodigoBusquedaState] = useState<string>(() => {
@@ -130,6 +216,11 @@ export const DashboardAutoridades: React.FC = () => {
 
   // Modal de actualización clínica / reclasificación de diagnóstico
   const [modalEditar, setModalEditar] = useState<boolean>(false);
+  const [modalNotificacion, setModalNotificacion] = useState<ModalNotificacionConfig>({
+    abierto: false,
+    titulo: '',
+    mensaje: ''
+  });
   const [formEdicion, setFormEdicion] = useState<{
     grado_escolar: string;
     subtipo_tdah: string;
@@ -140,6 +231,19 @@ export const DashboardAutoridades: React.FC = () => {
     diagnostico_observacion: ''
   });
   const [guardandoEdicion, setGuardandoEdicion] = useState<boolean>(false);
+
+  // Lista dinámica de cursos desde backend
+  const [listaCursos, setListaCursos] = useState<string[]>([
+    '1º de Secundaria', '2º de Secundaria', '3º de Secundaria',
+    '4º de Secundaria', '5º de Secundaria', '6º de Secundaria',
+    'Universitario - Pregrado'
+  ]);
+
+  useEffect(() => {
+    apiCliente.get('/auth/cursos-activos')
+      .then(r => { if (Array.isArray(r.data) && r.data.length) setListaCursos(r.data); })
+      .catch(() => {});
+  }, []);
 
   // Formateador amigable de Subtipo TDAH
   const getEtiquetaSubtipo = (subtipo?: string) => {
@@ -175,19 +279,13 @@ export const DashboardAutoridades: React.FC = () => {
     if (!estudianteActivo) return;
     setGuardandoEdicion(true);
     try {
-      const resp = await fetch(`http://127.0.0.1:8000/api/v1/monitoreo/estudiantes/${estudianteActivo.codigo_estudiante}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(formEdicion)
-      });
-      if (resp.ok) {
-        await cargarEstudiantes();
-        setEstudianteActivo(prev => ({
-          ...prev,
-          ...formEdicion
-        }));
-        setModalEditar(false);
-      }
+      await apiCliente.put(`/monitoreo/estudiantes/${estudianteActivo.codigo_estudiante}`, formEdicion);
+      await cargarEstudiantes();
+      setEstudianteActivo(prev => ({
+        ...prev!,
+        ...formEdicion
+      }));
+      setModalEditar(false);
     } catch (err) {
       console.error('Error al actualizar estudiante:', err);
     } finally {
@@ -207,29 +305,27 @@ export const DashboardAutoridades: React.FC = () => {
   const cargarEstudiantes = async () => {
     try {
       setCargandoEstudiantes(true);
-      const resp = await fetch('http://127.0.0.1:8000/api/v1/monitoreo/estudiantes');
-      if (resp.ok) {
-        const data = await resp.json();
-        if (Array.isArray(data) && data.length > 0) {
-          setEstudiantes(data);
-          // Si el estudiante activo coincide o hay uno guardado en sesión, seleccionarlo
-          const targetCod = sessionStorage.getItem('dashboard_codigo_estudiante') || codigoBusqueda;
-          const match = targetCod ? data.find((e: EstudianteItem) => e.codigo_estudiante === targetCod) : null;
-          if (match) {
-            setEstudianteActivo(match);
-            setCodigoBusqueda(match.codigo_estudiante);
-            setEstudianteEncontrado(true);
-          } else {
-            // Seleccionar automáticamente al primer estudiante real de la base de datos
-            setEstudianteActivo(data[0]);
-            setCodigoBusqueda(data[0].codigo_estudiante);
-            setEstudianteEncontrado(true);
-          }
+      const resp = await apiCliente.get('/monitoreo/estudiantes');
+      const data = resp.data;
+      if (Array.isArray(data) && data.length > 0) {
+        setEstudiantes(data);
+        // Si el estudiante activo coincide o hay uno guardado en sesión, seleccionarlo
+        const targetCod = sessionStorage.getItem('dashboard_codigo_estudiante') || codigoBusqueda;
+        const match = targetCod ? data.find((e: EstudianteItem) => e.codigo_estudiante === targetCod) : null;
+        if (match) {
+          setEstudianteActivo(match);
+          setCodigoBusqueda(match.codigo_estudiante);
+          setEstudianteEncontrado(true);
         } else {
-          setEstudiantes([]);
-          setEstudianteActivo(null);
-          setEstudianteEncontrado(false);
+          // Seleccionar automáticamente al primer estudiante real de la base de datos
+          setEstudianteActivo(data[0]);
+          setCodigoBusqueda(data[0].codigo_estudiante);
+          setEstudianteEncontrado(true);
         }
+      } else {
+        setEstudiantes([]);
+        setEstudianteActivo(null);
+        setEstudianteEncontrado(false);
       }
     } catch (err) {
       console.warn('Error cargando estudiantes desde backend:', err);
@@ -242,11 +338,8 @@ export const DashboardAutoridades: React.FC = () => {
   const cargarHistorial = async () => {
     try {
       setCargandoHistorial(true);
-      const resp = await fetch('http://127.0.0.1:8000/api/v1/reportes/historial');
-      if (resp.ok) {
-        const data = await resp.json();
-        setHistorialReportes(data);
-      }
+      const resp = await apiCliente.get('/reportes/historial');
+      setHistorialReportes(resp.data);
     } catch (err) {
       console.warn('Error cargando historial de reportes:', err);
     } finally {
@@ -259,13 +352,8 @@ export const DashboardAutoridades: React.FC = () => {
     if (!codigo) return;
     try {
       setCargandoBitacora(true);
-      const resp = await fetch(`http://127.0.0.1:8000/api/v1/monitoreo/estudiantes/${codigo.trim().toUpperCase()}/sesiones`);
-      if (resp.ok) {
-        const data = await resp.json();
-        setSesionesBitacora(Array.isArray(data) ? data : []);
-      } else {
-        setSesionesBitacora([]);
-      }
+      const resp = await apiCliente.get(`/monitoreo/estudiantes/${codigo.trim().toUpperCase()}/sesiones`);
+      setSesionesBitacora(Array.isArray(resp.data) ? resp.data : []);
     } catch (err) {
       console.warn('Error cargando bitácora de sesiones:', err);
       setSesionesBitacora([]);
@@ -278,12 +366,13 @@ export const DashboardAutoridades: React.FC = () => {
   useEffect(() => {
     cargarEstudiantes();
     cargarHistorial();
+    cargarMisCursos();
 
     // Sincronización continua de estado ACTIVO / EN VIVO de estudiantes (cada 6 segundos)
     const intervaloActivos = setInterval(() => {
-      fetch('http://127.0.0.1:8000/api/v1/monitoreo/estudiantes')
-        .then(res => res.json())
-        .then(data => {
+      apiCliente.get('/monitoreo/estudiantes')
+        .then(res => {
+          const data = res.data;
           if (Array.isArray(data)) {
             setEstudiantes(data);
             // Mantener actualizado el objeto estudianteActivo si está seleccionado
@@ -299,6 +388,174 @@ export const DashboardAutoridades: React.FC = () => {
 
     return () => clearInterval(intervaloActivos);
   }, []);
+
+  // Métodos de Cursos y Materiales Docentes
+  const cargarMisCursos = async () => {
+    try {
+      const resp = await apiCliente.get('/materiales/mis-cursos');
+      setMisCursos(resp.data.cursos || []);
+    } catch (err) {
+      console.warn('Error al cargar cursos asignados:', err);
+    }
+  };
+
+  const seleccionarCursoDocente = async (curso: CursoDocenteItem) => {
+    setCursoActivo(curso);
+    setSeccionActiva('CURSO_DOCENTE');
+    setDesplegableCursosDesktop(false);
+    setDesplegableCursosMobile(false);
+    setMenuHamburguesaAbierto(false);
+    await cargarMaterialesCurso(curso.id_curso);
+  };
+
+  const cargarMaterialesCurso = async (idCurso: string) => {
+    setCargandoMateriales(true);
+    try {
+      const resp = await apiCliente.get(`/materiales/curso/${idCurso}`);
+      setMaterialesCurso(resp.data.materiales || []);
+    } catch (err: any) {
+      console.warn('Error al cargar materiales del curso:', err);
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'ERROR',
+        titulo: 'Error al Cargar Materiales',
+        mensaje: err.response?.data?.detail || 'No se pudieron recuperar los materiales de este curso.',
+        textoBoton: 'Entendido'
+      });
+    } finally {
+      setCargandoMateriales(false);
+    }
+  };
+
+  const handleSubirMaterial = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cursoActivo) return;
+    if (!formNuevoMaterial.titulo.trim()) {
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'ADVERTENCIA',
+        titulo: 'Campo Requerido',
+        mensaje: 'Por favor ingresa un título descriptivo para el material o tarea.',
+        textoBoton: 'Aceptar'
+      });
+      return;
+    }
+    if (!formNuevoMaterial.archivo) {
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'ADVERTENCIA',
+        titulo: 'Archivo Requerido',
+        mensaje: 'Por favor selecciona un archivo (PDF, Word, PowerPoint o Imagen) para subir.',
+        textoBoton: 'Aceptar'
+      });
+      return;
+    }
+
+    setSubiendoMaterial(true);
+    try {
+      const data = new FormData();
+      data.append('file', formNuevoMaterial.archivo);
+      data.append('titulo', formNuevoMaterial.titulo.trim());
+      if (formNuevoMaterial.descripcion_tarea.trim()) {
+        data.append('descripcion_tarea', formNuevoMaterial.descripcion_tarea.trim());
+      }
+
+      await apiCliente.post(`/materiales/curso/${cursoActivo.id_curso}/subir`, data, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'EXITO',
+        titulo: 'Material Publicado',
+        mensaje: `El material "${formNuevoMaterial.titulo}" fue convertido a PDF y publicado exitosamente en el curso ${cursoActivo.nombre_curso}.`,
+        textoBoton: 'Excelente'
+      });
+
+      setFormNuevoMaterial({ titulo: '', descripcion_tarea: '', archivo: null });
+      cargarMaterialesCurso(cursoActivo.id_curso);
+      cargarMisCursos();
+    } catch (err: any) {
+      console.error('Error al subir material:', err);
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'ERROR',
+        titulo: 'Error de Conversión / Subida',
+        mensaje: err.response?.data?.detail || 'Ocurrió un error al procesar el archivo o convertirlo a PDF.',
+        textoBoton: 'Entendido'
+      });
+    } finally {
+      setSubiendoMaterial(false);
+    }
+  };
+
+  const handleGuardarEdicionMaterial = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!modalEditarMaterial.material || !cursoActivo) return;
+    setGuardandoEdicionMaterial(true);
+    try {
+      const data = new FormData();
+      if (modalEditarMaterial.titulo.trim()) {
+        data.append('titulo', modalEditarMaterial.titulo.trim());
+      }
+      data.append('descripcion_tarea', modalEditarMaterial.descripcion_tarea.trim());
+      if (modalEditarMaterial.nuevoArchivo) {
+        data.append('file', modalEditarMaterial.nuevoArchivo);
+      }
+
+      await apiCliente.patch(`/materiales/curso/${modalEditarMaterial.material.id_material}`, data, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'EXITO',
+        titulo: 'Material Actualizado',
+        mensaje: 'La descripción, título o documento fueron actualizados correctamente.',
+        textoBoton: 'Aceptar'
+      });
+
+      setModalEditarMaterial({ abierto: false, material: null, titulo: '', descripcion_tarea: '', nuevoArchivo: null });
+      cargarMaterialesCurso(cursoActivo.id_curso);
+    } catch (err: any) {
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'ERROR',
+        titulo: 'Error al Actualizar',
+        mensaje: err.response?.data?.detail || 'No se pudo guardar la modificación del material.',
+        textoBoton: 'Entendido'
+      });
+    } finally {
+      setGuardandoEdicionMaterial(false);
+    }
+  };
+
+  const handleEliminarMaterial = async (mat: MaterialCursoItem) => {
+    if (!cursoActivo) return;
+    if (!window.confirm(`¿Estás seguro de eliminar el material "${mat.titulo}"? Esta acción borrará el documento y sus instrucciones.`)) {
+      return;
+    }
+    try {
+      await apiCliente.delete(`/materiales/curso/${mat.id_material}`);
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'EXITO',
+        titulo: 'Material Eliminado',
+        mensaje: `El material "${mat.titulo}" ha sido removido del curso.`,
+        textoBoton: 'Aceptar'
+      });
+      cargarMaterialesCurso(cursoActivo.id_curso);
+      cargarMisCursos();
+    } catch (err: any) {
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'ERROR',
+        titulo: 'Error al Eliminar',
+        mensaje: err.response?.data?.detail || 'No se pudo eliminar el material seleccionado.',
+        textoBoton: 'Entendido'
+      });
+    }
+  };
 
   // Recargar bitácora cada vez que cambie el estudiante activo
   useEffect(() => {
@@ -345,24 +602,9 @@ export const DashboardAutoridades: React.FC = () => {
 
     // 2. Si no está en memoria, consultar endpoint específico
     try {
-      const resp = await fetch(`http://127.0.0.1:8000/api/v1/monitoreo/estudiantes/${codigoLimpio}`);
-      if (resp.ok) {
-        const data = await resp.json();
-        setEstudianteActivo(data);
-        setEstudianteEncontrado(true);
-      } else {
-        // Fallback genérico para códigos nuevos
-        setEstudianteActivo({
-          id_estudiante: 'est-query',
-          codigo_estudiante: codigoLimpio,
-          nombre_completo: `Estudiante ${codigoLimpio}`,
-          edad: 14,
-          grado_escolar: '3º de Secundaria',
-          subtipo_tdah: 'F90.2 (Presentación Combinada)',
-          diagnostico_observacion: 'Monitoreo atencional activo'
-        });
-        setEstudianteEncontrado(true);
-      }
+      const resp = await apiCliente.get(`/monitoreo/estudiantes/${codigoLimpio}`);
+      setEstudianteActivo(resp.data);
+      setEstudianteEncontrado(true);
     } catch (err) {
       setEstudianteEncontrado(false);
     }
@@ -374,18 +616,10 @@ export const DashboardAutoridades: React.FC = () => {
     const nuevoProtegido = est.protegido !== undefined ? !est.protegido : false;
     setActualizandoPrivacidad(est.codigo_estudiante);
     try {
-      const resp = await fetch(`http://127.0.0.1:8000/api/v1/monitoreo/estudiantes/${est.codigo_estudiante}/privacidad`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ protegido: nuevoProtegido })
-      });
-      if (resp.ok) {
-        setEstudiantes(prev => prev.map(item => item.codigo_estudiante === est.codigo_estudiante ? { ...item, protegido: nuevoProtegido } : item));
-        if (estudianteActivo?.codigo_estudiante === est.codigo_estudiante) {
-          setEstudianteActivo(prev => prev ? { ...prev, protegido: nuevoProtegido } : null);
-        }
-      } else {
-        alert('No se pudo actualizar el modo de privacidad.');
+      await apiCliente.patch(`/monitoreo/estudiantes/${est.codigo_estudiante}/privacidad`, { protegido: nuevoProtegido });
+      setEstudiantes(prev => prev.map(item => item.codigo_estudiante === est.codigo_estudiante ? { ...item, protegido: nuevoProtegido } : item));
+      if (estudianteActivo?.codigo_estudiante === est.codigo_estudiante) {
+        setEstudianteActivo(prev => prev ? { ...prev, protegido: nuevoProtegido } : null);
       }
     } catch (err) {
       console.warn('Error al actualizar privacidad:', err);
@@ -405,13 +639,10 @@ export const DashboardAutoridades: React.FC = () => {
     try {
       const queryResumido = resumido ? '?resumido=true' : '?resumido=false';
       const urlFetch = idSesionParam
-        ? `http://127.0.0.1:8000/api/v1/reportes/sesion/${idSesionParam}/descargar${queryResumido}`
-        : `http://127.0.0.1:8000/api/v1/reportes/descargar/${cod}${queryResumido}`;
-      const resp = await fetch(urlFetch);
-      if (!resp.ok) {
-        throw new Error(`Error en el servidor: ${resp.status}`);
-      }
-      const blob = await resp.blob();
+        ? `/reportes/sesion/${idSesionParam}/descargar${queryResumido}`
+        : `/reportes/descargar/${cod}${queryResumido}`;
+      const resp = await apiCliente.get(urlFetch, { responseType: 'blob' });
+      const blob = new Blob([resp.data], { type: 'application/pdf' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -425,9 +656,18 @@ export const DashboardAutoridades: React.FC = () => {
       // Refrescar historial
       cargarHistorial();
       cargarBitacoraEstudiante(cod);
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Error al descargar PDF del backend:', err);
-      alert(`⚠️ No se pudo conectar con el servidor backend en http://127.0.0.1:8000.`);
+      // Si fue 403 CUENTA_SUSPENDIDA, el interceptor ya disparó el cierre de sesión y modal global
+      if (err.response?.status !== 403) {
+        setModalNotificacion({
+          abierto: true,
+          tipo: 'ERROR',
+          titulo: 'Fallo de Descarga',
+          mensaje: err.response?.data?.detail || 'No se pudo generar o descargar el reporte PDF solicitado.',
+          textoBoton: 'Entendido'
+        });
+      }
     } finally {
       setDescargandoPdf(false);
       setCodigoDescargando(null);
@@ -448,10 +688,12 @@ export const DashboardAutoridades: React.FC = () => {
 
   // Conexión WebSockets en Tiempo Real al Canal del Estudiante Seleccionado (HU-10)
   useEffect(() => {
+    if (!tienePermiso('MONITOREAR_TIEMPO_REAL')) return;
     if (!estudianteEncontrado || !codigoBusqueda) return;
 
     const codigoEst = codigoBusqueda.trim().toUpperCase();
-    const wsUrl = `ws://127.0.0.1:8000/ws/monitoreo/${codigoEst}`;
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProto}//${window.location.host}/ws/monitoreo/${codigoEst}`;
     let socket: WebSocket | null = null;
     let pingInterval: any = null;
     let silenceTimer: any = null;
@@ -557,6 +799,31 @@ export const DashboardAutoridades: React.FC = () => {
     }
   };
 
+  const getSubtituloRol = (rol?: string) => {
+    switch (rol) {
+      case 'DOCENTE': return 'Panel Docente de Aula';
+      case 'PSICOLOGO': return 'Gabinete Psicopedagógico';
+      case 'DIRECTOR': return 'Supervisión Directiva';
+      case 'TUTOR': return 'Acompañamiento Familiar';
+      default: return 'Panel de Autoridades';
+    }
+  };
+
+  const getBadgeRol = (rol?: string) => {
+    switch (rol) {
+      case 'PSICOLOGO':
+        return 'bg-violet-500/20 text-violet-300 border border-violet-500/40';
+      case 'DOCENTE':
+        return 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40';
+      case 'DIRECTOR':
+        return 'bg-amber-500/20 text-amber-300 border border-amber-500/40';
+      case 'TUTOR':
+        return 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+      default:
+        return 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40';
+    }
+  };
+
   // Filtrado de estudiantes en la vista de Directorio
   const estudiantesFiltrados = estudiantes.filter(e => {
     const q = filtroEstudiantes.toLowerCase();
@@ -568,134 +835,216 @@ export const DashboardAutoridades: React.FC = () => {
   });
 
   return (
-    <div className="min-h-[calc(100vh-5rem)] p-4 md:p-6 max-w-7xl mx-auto space-y-6">
-      
-      {/* ============================================================== */}
-      {/* BARRA DE NAVEGACIÓN SUPERIOR CON MENÚ HAMBURGUESA             */}
-      {/* ============================================================== */}
-      <div className="glass-panel p-4 rounded-3xl border border-slate-800 flex items-center justify-between relative z-30">
-        
-        {/* Botón Hamburguesa e Indicador de Sección */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => setMenuHamburguesaAbierto(!menuHamburguesaAbierto)}
-            className="p-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-cyan-400 hover:text-cyan-300 transition shadow-lg flex items-center gap-2 cursor-pointer"
-            title="Abrir Menú de Navegación"
-          >
-            {menuHamburguesaAbierto ? <X className="w-5 h-5 text-rose-400" /> : <Menu className="w-5 h-5" />}
-            <span className="text-xs font-bold text-white hidden sm:inline">Menú</span>
-          </button>
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row font-sans selection:bg-indigo-500 selection:text-white">
 
-          <div className="flex items-center gap-2 border-l border-slate-800 pl-3">
-            <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse"></span>
-            <span className="text-sm font-bold font-heading text-white tracking-wide">
-              {seccionActiva === 'DASHBOARD' && 'Dashboard de Monitoreo'}
-              {seccionActiva === 'ESTUDIANTES' && 'Directorio de Estudiantes'}
-              {seccionActiva === 'HISTORIAL' && 'Historial de Reportes PDF'}
+      {/* ========================================================================= */}
+      {/* MENÚ LATERAL PERSISTENTE (SIDEBAR DARK GLASS)                            */}
+      {/* ========================================================================= */}
+      {/* Overlay para móvil */}
+      {sidebarMobileAbierta && (
+        <div
+          onClick={() => setSidebarMobileAbierta(false)}
+          className="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-sm md:hidden"
+        />
+      )}
+
+      <aside className={`fixed md:sticky top-0 z-50 h-screen w-72 bg-slate-900/95 border-r border-slate-800/80 flex flex-col justify-between shrink-0 p-5 backdrop-blur-xl transition-transform duration-300 ${
+        sidebarMobileAbierta ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+      }`}>
+        <div className="space-y-6 overflow-y-auto pr-1">
+          
+          {/* Brand Header */}
+          <div className="flex items-center gap-3 px-2 py-1">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-cyan-500 to-indigo-600 p-0.5 flex items-center justify-center shadow-lg shadow-cyan-500/25">
+              <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
+                <ShieldCheck className="w-5 h-5 text-cyan-400" />
+              </div>
+            </div>
+            <div className="flex-1 min-w-0">
+              <h1 className="text-sm font-black tracking-wider text-white flex items-center gap-1.5 font-mono">
+                NEUROFOCUS<span className="text-cyan-400">AI</span>
+              </h1>
+              <span className="text-[10px] uppercase font-bold tracking-widest text-violet-300/80 truncate block">
+                {getSubtituloRol(usuario?.rol)}
+              </span>
+            </div>
+            {/* Botón cerrar para móvil */}
+            <button
+              onClick={() => setSidebarMobileAbierta(false)}
+              className="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Menú de Navegación Lateral */}
+          <nav className="space-y-1.5 text-xs font-semibold">
+            <button
+              onClick={() => { setSeccionActiva('DASHBOARD'); setSidebarMobileAbierta(false); }}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl transition cursor-pointer text-left ${
+                seccionActiva === 'DASHBOARD'
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4 shrink-0 text-cyan-400" />
+              <span>Dashboard de Monitoreo</span>
+            </button>
+
+            {(tienePermiso('VER_TODOS_ESTUDIANTES') || tienePermiso('VER_ESTUDIANTES_ASIGNADOS')) && (
+              <button
+                onClick={() => { setSeccionActiva('ESTUDIANTES'); setSidebarMobileAbierta(false); cargarEstudiantes(); }}
+                className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl transition cursor-pointer text-left ${
+                  seccionActiva === 'ESTUDIANTES'
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                <div className="flex items-center gap-3 truncate">
+                  <Users className="w-4 h-4 shrink-0 text-emerald-400" />
+                  <span className="truncate">{tienePermiso('VER_TODOS_ESTUDIANTES') ? 'Estudiantes' : 'Mis Tutorados'}</span>
+                </div>
+                {estudiantes.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700 shrink-0">
+                    {estudiantes.length}
+                  </span>
+                )}
+              </button>
+            )}
+
+            {tienePermiso('VER_HISTORIAL_REPORTES') && (
+              <button
+                onClick={() => { setSeccionActiva('HISTORIAL'); setSidebarMobileAbierta(false); cargarHistorial(); }}
+                className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl transition cursor-pointer text-left ${
+                  seccionActiva === 'HISTORIAL'
+                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                }`}
+              >
+                <FileText className="w-4 h-4 shrink-0 text-violet-400" />
+                <span>Historial de Reportes</span>
+              </button>
+            )}
+
+            {/* Menú Desplegable Cursos y Tareas (Acordeón Lateral para Docentes) */}
+            {(tienePermiso('GESTIONAR_MATERIALES_CLASE') || usuario?.rol === 'DOCENTE' || usuario?.rol === 'SUPERADMIN' || usuario?.rol === 'DIRECTOR') && (
+              <div className="pt-2">
+                <button
+                  onClick={() => setDesplegableCursosLateral(!desplegableCursosLateral)}
+                  className={`w-full flex items-center justify-between px-3.5 py-3 rounded-2xl transition cursor-pointer text-left ${
+                    seccionActiva === 'CURSO_DOCENTE'
+                      ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/40 font-bold'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                  }`}
+                >
+                  <div className="flex items-center gap-3 truncate">
+                    <BookOpen className="w-4 h-4 shrink-0 text-cyan-400" />
+                    <span className="truncate">Cursos Asignados</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-indigo-300 border border-slate-700">
+                      {misCursos.length}
+                    </span>
+                    {desplegableCursosLateral ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                  </div>
+                </button>
+
+                {/* Submenú de cursos en árbol */}
+                {desplegableCursosLateral && (
+                  <div className="pl-4 pr-1 py-1 space-y-1 border-l-2 border-indigo-500/30 ml-4 mt-1 animate-in fade-in duration-150">
+                    {misCursos.map((c) => (
+                      <button
+                        key={c.id_curso}
+                        onClick={() => {
+                          seleccionarCursoDocente(c);
+                          setSidebarMobileAbierta(false);
+                        }}
+                        className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-[11px] transition cursor-pointer text-left ${
+                          cursoActivo?.id_curso === c.id_curso && seccionActiva === 'CURSO_DOCENTE'
+                            ? 'bg-indigo-600 text-white font-bold shadow-md shadow-indigo-600/30'
+                            : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="font-mono text-slate-500 text-xs">├──</span>
+                          <span className="truncate">{c.nombre_curso}</span>
+                        </div>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-slate-800/80 text-slate-400 font-mono shrink-0">
+                          {c.total_materiales} docs
+                        </span>
+                      </button>
+                    ))}
+                    {misCursos.length === 0 && (
+                      <p className="text-[10px] text-slate-500 px-3 py-1">Sin cursos asignados aún.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </nav>
+        </div>
+
+        {/* Footer del Menú Lateral: Perfil y Logout */}
+        <div className="pt-4 border-t border-slate-800/80 space-y-3">
+          <div className="p-3 bg-slate-950/60 rounded-2xl border border-slate-800 flex items-center justify-between">
+            <div className="truncate">
+              <p className="text-xs font-bold text-white truncate">{usuario?.username || 'usuario'}</p>
+              <span className="text-[10px] text-emerald-400 flex items-center gap-1 font-mono">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                {usuario?.rol || 'AUTORIDAD'} / Activo
+              </span>
+            </div>
+            <button
+              onClick={logout}
+              title="Cerrar sesión"
+              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-900 rounded-xl transition cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* ========================================================================= */}
+      {/* CONTENIDO PRINCIPAL                                                       */}
+      {/* ========================================================================= */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        
+        {/* Topbar Superior */}
+        <header className="h-20 px-6 sm:px-8 border-b border-slate-800/80 bg-slate-900/40 backdrop-blur-md flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSidebarMobileAbierta(true)}
+              className="md:hidden p-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:text-white cursor-pointer"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                {seccionActiva === 'DASHBOARD' && 'Dashboard de Monitoreo'}
+                {seccionActiva === 'ESTUDIANTES' && (tienePermiso('VER_TODOS_ESTUDIANTES') ? 'Directorio de Estudiantes' : 'Mis Tutorados')}
+                {seccionActiva === 'HISTORIAL' && 'Historial de Reportes PDF'}
+                {seccionActiva === 'CURSO_DOCENTE' && (cursoActivo ? `Curso: ${cursoActivo.nombre_curso}` : 'Gestión de Cursos y Tareas')}
+              </h2>
+              <p className="text-[11px] text-slate-400 hidden sm:block">
+                {seccionActiva === 'DASHBOARD' && 'Monitoreo biométrico de atención, parpadeos, IAI y streaming'}
+                {seccionActiva === 'ESTUDIANTES' && 'Expediente atencional y solicitud de reportes clínicos'}
+                {seccionActiva === 'HISTORIAL' && 'Descarga de reportes Platypus y resúmenes ejecutivos'}
+                {seccionActiva === 'CURSO_DOCENTE' && 'Publicación de materiales escolares y especificación de tareas'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className={`px-3 py-1 rounded-full text-xs font-mono font-bold uppercase ${getBadgeRol(usuario?.rol)}`}>
+              {usuario?.rol || 'DOCENTE'}
             </span>
           </div>
-        </div>
+        </header>
 
-        {/* Pestañas de Acceso Rápido (Desktop) */}
-        <div className="hidden md:flex items-center gap-2 bg-slate-900/90 p-1.5 rounded-2xl border border-slate-800">
-          <button
-            onClick={() => { setSeccionActiva('DASHBOARD'); setMenuHamburguesaAbierto(false); }}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition ${
-              seccionActiva === 'DASHBOARD'
-                ? 'bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/20'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <LayoutDashboard className="w-4 h-4" /> Dashboard
-          </button>
-
-          <button
-            onClick={() => { setSeccionActiva('ESTUDIANTES'); setMenuHamburguesaAbierto(false); cargarEstudiantes(); }}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition ${
-              seccionActiva === 'ESTUDIANTES'
-                ? 'bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/20'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <Users className="w-4 h-4" /> Estudiantes ({estudiantes.length})
-          </button>
-
-          <button
-            onClick={() => { setSeccionActiva('HISTORIAL'); setMenuHamburguesaAbierto(false); cargarHistorial(); }}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition ${
-              seccionActiva === 'HISTORIAL'
-                ? 'bg-cyan-500 text-slate-950 font-bold shadow-md shadow-cyan-500/20'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-            }`}
-          >
-            <FileText className="w-4 h-4" /> Historial de Reportes
-          </button>
-        </div>
-
-        {/* Badge de Rol Activo */}
-        <div className="flex items-center gap-2">
-          <span className="px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/30 text-violet-300 font-mono font-bold text-xs uppercase">
-            {usuario?.rol || 'DOCENTE'}
-          </span>
-        </div>
-
-        {/* ============================================================== */}
-        {/* DESPLEGABLE DEL MENÚ HAMBURGUESA                               */}
-        {/* ============================================================== */}
-        {menuHamburguesaAbierto && (
-          <div className="absolute top-full left-4 mt-2 w-72 glass-panel p-3 rounded-2xl border border-slate-700 shadow-2xl space-y-1.5 animate-in fade-in zoom-in-95 duration-150 z-50">
-            <p className="px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800">
-              Navegación del Sistema
-            </p>
-            
-            <button
-              onClick={() => { setSeccionActiva('DASHBOARD'); setMenuHamburguesaAbierto(false); }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition ${
-                seccionActiva === 'DASHBOARD'
-                  ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`}
-            >
-              <LayoutDashboard className="w-4 h-4 text-cyan-400" />
-              <div className="text-left">
-                <p className="font-bold">Dashboard</p>
-                <p className="text-[10px] text-slate-400">Telemetría biométrica en vivo</p>
-              </div>
-            </button>
-
-            <button
-              onClick={() => { setSeccionActiva('ESTUDIANTES'); setMenuHamburguesaAbierto(false); cargarEstudiantes(); }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition ${
-                seccionActiva === 'ESTUDIANTES'
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`}
-            >
-              <Users className="w-4 h-4 text-emerald-400" />
-              <div className="text-left">
-                <p className="font-bold">Estudiantes</p>
-                <p className="text-[10px] text-slate-400">Lista completa ({estudiantes.length} registrados)</p>
-              </div>
-            </button>
-
-            <button
-              onClick={() => { setSeccionActiva('HISTORIAL'); setMenuHamburguesaAbierto(false); cargarHistorial(); }}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition ${
-                seccionActiva === 'HISTORIAL'
-                  ? 'bg-violet-500/20 text-violet-300 border border-violet-500/40'
-                  : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-              }`}
-            >
-              <FileText className="w-4 h-4 text-violet-400" />
-              <div className="text-left">
-                <p className="font-bold">Historial de Reportes</p>
-                <p className="text-[10px] text-slate-400">Descarga de reportes PDF oficiales</p>
-              </div>
-            </button>
-          </div>
-        )}
-
-      </div>
+        {/* Contenedor Principal de Vistas */}
+        <div className="p-4 md:p-8 space-y-6 max-w-7xl mx-auto w-full flex-1">
 
       {/* ============================================================== */}
       {/* VISTA 1: DASHBOARD DE MONITOREO                                */}
@@ -806,50 +1155,62 @@ export const DashboardAutoridades: React.FC = () => {
                 <div className="flex items-center gap-2 shrink-0 flex-wrap">
                   <button
                     onClick={(e) => togglePrivacidadEstudiante(estudianteActivo, e)}
-                    disabled={actualizandoPrivacidad === estudianteActivo.codigo_estudiante}
+                    disabled={actualizandoPrivacidad === estudianteActivo.codigo_estudiante || !tienePermiso('GESTIONAR_PRIVACIDAD_ESTUDIANTE')}
                     className={`px-3 py-2.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 cursor-pointer shadow-md ${
-                      estudianteActivo.protegido !== false
+                      !tienePermiso('GESTIONAR_PRIVACIDAD_ESTUDIANTE')
+                        ? 'opacity-50 cursor-not-allowed bg-slate-900 border-slate-700 text-slate-500'
+                        : estudianteActivo.protegido !== false
                         ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/25'
                         : 'bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25'
                     }`}
-                    title="Alternar entre Malla Facial 3D anonimizada o Rostro Real"
+                    title={
+                      !tienePermiso('GESTIONAR_PRIVACIDAD_ESTUDIANTE')
+                        ? 'Requiere autorización de privacidad biométrica (Ley 548)'
+                        : 'Alternar entre Malla Facial 3D anonimizada o Rostro Real'
+                    }
                   >
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
                     {estudianteActivo.protegido !== false ? '🛡️ Malla 3D (Anonimizado)' : '📷 Rostro Real (Auditado)'}
                   </button>
 
-                  <button
-                    onClick={() => abrirModalEdicion(estudianteActivo)}
-                    className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-white border border-amber-500/30 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
-                    title="Editar diagnóstico clínico o grado del estudiante"
-                  >
-                    <Edit3 className="w-4 h-4" />
-                    Editar
-                  </button>
+                  {(tienePermiso('EDITAR_CLASIFICACION_CLINICA') || tienePermiso('EDITAR_PERFIL_ESTUDIANTE')) && (
+                    <button
+                      onClick={() => abrirModalEdicion(estudianteActivo)}
+                      className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-white border border-amber-500/30 rounded-xl font-bold text-xs flex items-center gap-1.5 transition cursor-pointer"
+                      title="Editar diagnóstico clínico o grado del estudiante"
+                    >
+                      <Edit3 className="w-4 h-4" />
+                      Editar
+                    </button>
+                  )}
 
-                  <button
-                    onClick={() => handleExportarPdf(estudianteActivo.codigo_estudiante, undefined, false)}
-                    disabled={descargandoPdf}
-                    className="px-4 py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-violet-500/30 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
-                    title="Descargar reporte completo (todos los episodios registrados)"
-                  >
-                    <Download className="w-4 h-4" />
-                    {descargandoPdf && codigoDescargando === `${estudianteActivo.codigo_estudiante}-completo`
-                      ? 'Generando...' 
-                      : `PDF Completo`}
-                  </button>
+                  {tienePermiso('DESCARGAR_REPORTE_COMPLETO') && (
+                    <button
+                      onClick={() => handleExportarPdf(estudianteActivo.codigo_estudiante, undefined, false)}
+                      disabled={descargandoPdf}
+                      className="px-4 py-2.5 bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-violet-500/30 flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                      title="Descargar reporte completo (todos los episodios registrados)"
+                    >
+                      <Download className="w-4 h-4" />
+                      {descargandoPdf && codigoDescargando === `${estudianteActivo.codigo_estudiante}-completo`
+                        ? 'Generando...' 
+                        : `PDF Completo`}
+                    </button>
+                  )}
 
-                  <button
-                    onClick={() => handleExportarPdf(estudianteActivo.codigo_estudiante, undefined, true)}
-                    disabled={descargandoPdf}
-                    className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/40 font-bold text-xs rounded-xl shadow-lg flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
-                    title="Descargar reporte resumen (8 eventos más críticos)"
-                  >
-                    <Sparkles className="w-4 h-4 text-amber-400" />
-                    {descargandoPdf && codigoDescargando === `${estudianteActivo.codigo_estudiante}-resumen`
-                      ? 'Resumiendo...' 
-                      : `Resumen (Top 8)`}
-                  </button>
+                  {tienePermiso('DESCARGAR_REPORTE_RESUMEN') && (
+                    <button
+                      onClick={() => handleExportarPdf(estudianteActivo.codigo_estudiante, undefined, true)}
+                      disabled={descargandoPdf}
+                      className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/40 font-bold text-xs rounded-xl shadow-lg flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                      title="Descargar reporte resumen (8 eventos más críticos)"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-400" />
+                      {descargandoPdf && codigoDescargando === `${estudianteActivo.codigo_estudiante}-resumen`
+                        ? 'Resumiendo...' 
+                        : `Resumen (Top 8)`}
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -1084,7 +1445,11 @@ export const DashboardAutoridades: React.FC = () => {
                       </h3>
                       <p className="text-xs text-slate-400 mt-0.5">Visión computacional MediaPipe FaceMesh & SolvePnP 3D</p>
                     </div>
-                    {recibiendoTelemetria && frameStream ? (
+                    {!tienePermiso('MONITOREAR_TIEMPO_REAL') ? (
+                      <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-slate-400" /> Acceso Restringido
+                      </span>
+                    ) : recibiendoTelemetria && frameStream ? (
                       <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase flex items-center gap-1.5">
                         <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Feed HD en Vivo (~6 FPS)
                       </span>
@@ -1096,75 +1461,91 @@ export const DashboardAutoridades: React.FC = () => {
                   </div>
 
                   {/* Viewport del Frame en Alta Definición y Aspect Ratio Nativo */}
-                  <div className="w-full aspect-video max-h-80 rounded-2xl bg-slate-950 border border-slate-800 overflow-hidden relative flex items-center justify-center shadow-2xl">
-                    {recibiendoTelemetria && frameStream ? (
-                      <div className="w-full h-full relative flex items-center justify-center bg-black/90">
-                        <img
-                          src={frameStream}
-                          alt="Feed biométrico en vivo del estudiante"
-                          className="w-full h-full object-contain rounded-xl select-none"
-                          style={{ imageRendering: 'auto' }}
-                        />
-                        {/* Overlay de Abandono de Puesto Escolar */}
-                        {metricasActuales?.esAbandonoPuesto && (
-                          <div className="absolute inset-0 bg-rose-950/85 backdrop-blur-sm flex flex-col items-center justify-center text-center p-4 z-20">
-                            <AlertCircle className="w-10 h-10 text-rose-400 animate-bounce mb-2" />
-                            <p className="text-white font-bold text-sm">Estudiante Fuera de Cámara</p>
-                            <p className="text-rose-300 text-xs mt-0.5">Abandono de puesto escolar detectado (IAI: 0%)</p>
+                  {!tienePermiso('MONITOREAR_TIEMPO_REAL') ? (
+                    <div className="w-full aspect-video max-h-80 rounded-2xl bg-slate-950/90 border border-slate-800 flex flex-col items-center justify-center text-center p-6 space-y-3 shadow-inner">
+                      <div className="w-12 h-12 rounded-2xl bg-slate-900 border border-slate-700/80 flex items-center justify-center text-slate-400">
+                        <ShieldCheck className="w-6 h-6 text-cyan-400" />
+                      </div>
+                      <div className="max-w-md">
+                        <p className="text-white font-bold text-sm">Monitoreo en Vivo Restringido</p>
+                        <p className="text-slate-400 text-xs mt-1 leading-relaxed">
+                          La transmisión de cámara en tiempo real está reservada exclusivamente para personal docente y clínico en aula (Ley 548). Las métricas acumuladas, bitácora longitudinal e informes consolidados permanecen disponibles.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full aspect-video max-h-80 rounded-2xl bg-slate-950 border border-slate-800 overflow-hidden relative flex items-center justify-center shadow-2xl">
+                      {recibiendoTelemetria && frameStream ? (
+                        <div className="w-full h-full relative flex items-center justify-center bg-black/90">
+                          <img
+                            src={frameStream}
+                            alt="Feed biométrico en vivo del estudiante"
+                            className="w-full h-full object-contain rounded-xl select-none"
+                            style={{ imageRendering: 'auto' }}
+                          />
+                          {/* Overlay de Abandono de Puesto Escolar */}
+                          {metricasActuales?.esAbandonoPuesto && (
+                            <div className="absolute inset-0 bg-rose-950/85 backdrop-blur-sm flex flex-col items-center justify-center text-center p-4 z-20">
+                              <AlertCircle className="w-10 h-10 text-rose-400 animate-bounce mb-2" />
+                              <p className="text-white font-bold text-sm">Estudiante Fuera de Cámara</p>
+                              <p className="text-rose-300 text-xs mt-0.5">Abandono de puesto escolar detectado (IAI: 0%)</p>
+                            </div>
+                          )}
+
+                          <div className={`absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-slate-950/80 backdrop-blur-md border text-[10px] font-mono flex items-center gap-2 z-10 ${
+                            estudianteActivo?.protegido !== false ? 'border-emerald-500/40 text-emerald-300' : 'border-amber-500/40 text-amber-300'
+                          }`}>
+                            <span className={`w-1.5 h-1.5 rounded-full animate-ping ${estudianteActivo?.protegido !== false ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
+                            {estudianteActivo?.protegido !== false ? '🛡️ Malla 3D Anonimizada' : '📷 Rostro Real Auditado'}
                           </div>
-                        )}
 
-                        <div className="absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-slate-950/80 backdrop-blur-md border border-slate-700/80 text-[10px] font-mono text-emerald-300 flex items-center gap-2 z-10">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                          Malla Facial PnP Activa
+                          {/* Badges de Biomarcadores Clínicos Específicos */}
+                          <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 z-10">
+                            {metricasActuales?.esBostezo && (
+                              <span className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 text-[9px] font-bold shadow animate-pulse">
+                                🥱 Bostezo
+                              </span>
+                            )}
+                            {metricasActuales?.distractorExterno && (
+                              <span className="px-2 py-0.5 rounded bg-purple-600 text-white text-[9px] font-bold shadow animate-pulse">
+                                👥 Distractor (+1)
+                              </span>
+                            )}
+                            {metricasActuales?.esSomnolencia && (
+                              <span className="px-2 py-0.5 rounded bg-indigo-600 text-white text-[9px] font-bold shadow animate-pulse">
+                                😴 Somnolencia
+                              </span>
+                            )}
+                            {metricasActuales?.esStaring && (
+                              <span className="px-2 py-0.5 rounded bg-cyan-600 text-white text-[9px] font-bold shadow">
+                                👁️ Staring
+                              </span>
+                            )}
+                            {metricasActuales?.esSlumping && (
+                              <span className="px-2 py-0.5 rounded bg-rose-600 text-white text-[9px] font-bold shadow">
+                                📉 Slumping
+                              </span>
+                            )}
+                            <span className="px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm text-[9px] font-mono text-slate-300 border border-slate-700">
+                              4 Hz • PnP 3D
+                            </span>
+                          </div>
                         </div>
-
-                        {/* Badges de Biomarcadores Clínicos Específicos */}
-                        <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 z-10">
-                          {metricasActuales?.esBostezo && (
-                            <span className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 text-[9px] font-bold shadow animate-pulse">
-                              🥱 Bostezo
-                            </span>
-                          )}
-                          {metricasActuales?.distractorExterno && (
-                            <span className="px-2 py-0.5 rounded bg-purple-600 text-white text-[9px] font-bold shadow animate-pulse">
-                              👥 Distractor (+1)
-                            </span>
-                          )}
-                          {metricasActuales?.esSomnolencia && (
-                            <span className="px-2 py-0.5 rounded bg-indigo-600 text-white text-[9px] font-bold shadow animate-pulse">
-                              😴 Somnolencia
-                            </span>
-                          )}
-                          {metricasActuales?.esStaring && (
-                            <span className="px-2 py-0.5 rounded bg-cyan-600 text-white text-[9px] font-bold shadow">
-                              👁️ Staring
-                            </span>
-                          )}
-                          {metricasActuales?.esSlumping && (
-                            <span className="px-2 py-0.5 rounded bg-rose-600 text-white text-[9px] font-bold shadow">
-                              📉 Slumping
-                            </span>
-                          )}
-                          <span className="px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm text-[9px] font-mono text-slate-300 border border-slate-700">
-                            4 Hz • PnP 3D
-                          </span>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
+                          <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 shadow-inner">
+                            <Camera className="w-7 h-7 text-slate-500" />
+                          </div>
+                          <div className="space-y-1">
+                            <p className="text-sm font-semibold text-slate-300">Cámara del Estudiante en Espera</p>
+                            <p className="text-xs text-slate-500 max-w-xs leading-relaxed">
+                              Al encender la cámara en clase, la transmisión en vivo con la malla geométrica (ojos, nariz SolvePnP y hombros) se proyectará en esta ventana.
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
-                        <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 shadow-inner">
-                          <Camera className="w-7 h-7 text-slate-500" />
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-sm font-semibold text-slate-300">Cámara del Estudiante en Espera</p>
-                          <p className="text-xs text-slate-500 max-w-xs leading-relaxed">
-                            Al encender la cámara en clase, la transmisión en vivo con la malla geométrica (ojos, nariz SolvePnP y hombros) se proyectará en esta ventana.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-                  </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Panel Derecho: Gráfico SVG de Línea de Tiempo de Atención en Vivo */}
@@ -1446,24 +1827,28 @@ export const DashboardAutoridades: React.FC = () => {
 
                                 <td className="px-5 py-4 text-right whitespace-nowrap">
                                   <div className="flex items-center justify-end gap-2">
-                                    <button
-                                      onClick={() => handleExportarPdf(estudianteActivo.codigo_estudiante, s.id_sesion, false)}
-                                      disabled={descargandoPdf}
-                                      className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs rounded-xl shadow-md transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                                      title={`Descargar Reporte Completo (100% de episodios) de la Sesión ${s.numero_sesion}`}
-                                    >
-                                      <Download className="w-3.5 h-3.5" />
-                                      <span>{descargandoPdf && codigoDescargando === `${estudianteActivo.codigo_estudiante}-${s.id_sesion}-completo` ? 'Generando...' : 'Descargar PDF'}</span>
-                                    </button>
-                                    <button
-                                      onClick={() => handleExportarPdf(estudianteActivo.codigo_estudiante, s.id_sesion, true)}
-                                      disabled={descargandoPdf}
-                                      className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/30 hover:border-amber-400 font-bold text-xs rounded-xl shadow-md transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                                      title={`Descargar Reporte Resumen (Top 8 eventos más críticos) de la Sesión ${s.numero_sesion}`}
-                                    >
-                                      <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                                      <span>{descargandoPdf && codigoDescargando === `${estudianteActivo.codigo_estudiante}-${s.id_sesion}-resumen` ? 'Resumiendo...' : 'Descargar Resumen'}</span>
-                                    </button>
+                                    {tienePermiso('DESCARGAR_REPORTE_COMPLETO') && (
+                                      <button
+                                        onClick={() => handleExportarPdf(estudianteActivo.codigo_estudiante, s.id_sesion, false)}
+                                        disabled={descargandoPdf}
+                                        className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white font-bold text-xs rounded-xl shadow-md transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                        title={`Descargar Reporte Completo (100% de episodios) de la Sesión ${s.numero_sesion}`}
+                                      >
+                                        <Download className="w-3.5 h-3.5" />
+                                        <span>{descargandoPdf && codigoDescargando === `${estudianteActivo.codigo_estudiante}-${s.id_sesion}-completo` ? 'Generando...' : 'Descargar PDF'}</span>
+                                      </button>
+                                    )}
+                                    {tienePermiso('DESCARGAR_REPORTE_RESUMEN') && (
+                                      <button
+                                        onClick={() => handleExportarPdf(estudianteActivo.codigo_estudiante, s.id_sesion, true)}
+                                        disabled={descargandoPdf}
+                                        className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/30 hover:border-amber-400 font-bold text-xs rounded-xl shadow-md transition inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                        title={`Descargar Reporte Resumen (Top 8 eventos más críticos) de la Sesión ${s.numero_sesion}`}
+                                      >
+                                        <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                                        <span>{descargandoPdf && codigoDescargando === `${estudianteActivo.codigo_estudiante}-${s.id_sesion}-resumen` ? 'Resumiendo...' : 'Descargar Resumen'}</span>
+                                      </button>
+                                    )}
                                   </div>
                                 </td>
                               </tr>
@@ -1506,11 +1891,15 @@ export const DashboardAutoridades: React.FC = () => {
           <div className="glass-panel p-6 rounded-3xl border border-slate-800 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div>
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-semibold uppercase tracking-wider mb-2">
-                <Users className="w-4 h-4" /> Directorio de Estudiantes Registrados
+                <Users className="w-4 h-4" /> {tienePermiso('VER_TODOS_ESTUDIANTES') ? 'Directorio de Estudiantes Registrados' : 'Mis Tutorados / Alumnos Asignados'}
               </div>
-              <h2 className="text-2xl font-bold font-heading text-white">Estudiantes de la Institución</h2>
+              <h2 className="text-2xl font-bold font-heading text-white">
+                {tienePermiso('VER_TODOS_ESTUDIANTES') ? 'Estudiantes de la Institución' : 'Estudiantes Asignados a su Tutela'}
+              </h2>
               <p className="text-slate-400 text-xs mt-1">
-                Consulta los perfiles, grado escolar y solicita el reporte formal de cada estudiante.
+                {tienePermiso('VER_TODOS_ESTUDIANTES')
+                  ? 'Consulta los perfiles, grado escolar y solicita el reporte formal de cada estudiante.'
+                  : 'Consulta los perfiles, grado escolar y reportes de seguimiento de los estudiantes bajo su tutela.'}
               </p>
             </div>
 
@@ -1610,13 +1999,19 @@ export const DashboardAutoridades: React.FC = () => {
                           </span>
                           <button
                             onClick={(e) => togglePrivacidadEstudiante(est, e)}
-                            disabled={actualizandoPrivacidad === est.codigo_estudiante}
-                            className={`px-2 py-1 rounded-xl text-[10px] font-bold border transition flex items-center gap-1.5 cursor-pointer shadow-sm ${
-                              est.protegido !== false
-                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/25'
-                                : 'bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25'
+                            disabled={actualizandoPrivacidad === est.codigo_estudiante || !tienePermiso('GESTIONAR_PRIVACIDAD_ESTUDIANTE')}
+                            className={`px-2 py-1 rounded-xl text-[10px] font-bold border transition flex items-center gap-1.5 shadow-sm ${
+                              !tienePermiso('GESTIONAR_PRIVACIDAD_ESTUDIANTE')
+                                ? 'opacity-50 cursor-not-allowed bg-slate-900 border-slate-700 text-slate-400'
+                                : est.protegido !== false
+                                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/25 cursor-pointer'
+                                  : 'bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25 cursor-pointer'
                             }`}
-                            title={est.protegido !== false ? 'Clic para permitir captura de Rostro Real' : 'Clic para activar Malla Facial 3D anonimizada'}
+                            title={
+                              !tienePermiso('GESTIONAR_PRIVACIDAD_ESTUDIANTE')
+                                ? 'Requiere permiso para gestionar la privacidad de estudiantes'
+                                : est.protegido !== false ? 'Clic para permitir captura de Rostro Real' : 'Clic para activar Malla Facial 3D anonimizada'
+                            }
                           >
                             {actualizandoPrivacidad === est.codigo_estudiante ? (
                               <span className="animate-spin text-xs">⏳</span>
@@ -1645,34 +2040,40 @@ export const DashboardAutoridades: React.FC = () => {
                         <Eye className="w-3.5 h-3.5" /> Ver en Vivo
                       </button>
 
-                      <button
-                        onClick={() => {
-                          seleccionarEstudiante(est);
-                          abrirModalEdicion(est);
-                        }}
-                        className="p-2 bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-white rounded-xl border border-slate-700 transition cursor-pointer"
-                        title="Editar diagnóstico clínico o grado"
-                      >
-                        <Edit3 className="w-3.5 h-3.5" />
-                      </button>
+                      {(tienePermiso('EDITAR_CLASIFICACION_CLINICA') || tienePermiso('EDITAR_PERFIL_ESTUDIANTE')) && (
+                        <button
+                          onClick={() => {
+                            seleccionarEstudiante(est);
+                            abrirModalEdicion(est);
+                          }}
+                          className="p-2 bg-slate-900 hover:bg-slate-800 text-amber-300 hover:text-white rounded-xl border border-slate-700 transition cursor-pointer"
+                          title="Editar diagnóstico clínico o grado"
+                        >
+                          <Edit3 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
 
                       <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => handleExportarPdf(est.codigo_estudiante, undefined, false)}
-                          disabled={descargandoPdf && codigoDescargando === `${est.codigo_estudiante}-completo`}
-                          className="p-2 bg-violet-600/90 hover:bg-violet-500 text-white rounded-xl shadow-md transition cursor-pointer disabled:opacity-50"
-                          title={`Descargar reporte PDF completo (todos los episodios) de ${est.nombre_completo}`}
-                        >
-                          <Download className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleExportarPdf(est.codigo_estudiante, undefined, true)}
-                          disabled={descargandoPdf && codigoDescargando === `${est.codigo_estudiante}-resumen`}
-                          className="p-2 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/30 rounded-xl shadow-md transition cursor-pointer disabled:opacity-50"
-                          title={`Descargar reporte Resumen (Top 8 eventos más críticos) de ${est.nombre_completo}`}
-                        >
-                          <Sparkles className="w-4 h-4 text-amber-400" />
-                        </button>
+                        {tienePermiso('DESCARGAR_REPORTE_COMPLETO') && (
+                          <button
+                            onClick={() => handleExportarPdf(est.codigo_estudiante, undefined, false)}
+                            disabled={descargandoPdf && codigoDescargando === `${est.codigo_estudiante}-completo`}
+                            className="p-2 bg-violet-600/90 hover:bg-violet-500 text-white rounded-xl shadow-md transition cursor-pointer disabled:opacity-50"
+                            title={`Descargar reporte PDF completo (todos los episodios) de ${est.nombre_completo}`}
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                        )}
+                        {tienePermiso('DESCARGAR_REPORTE_RESUMEN') && (
+                          <button
+                            onClick={() => handleExportarPdf(est.codigo_estudiante, undefined, true)}
+                            disabled={descargandoPdf && codigoDescargando === `${est.codigo_estudiante}-resumen`}
+                            className="p-2 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/30 rounded-xl shadow-md transition cursor-pointer disabled:opacity-50"
+                            title={`Descargar reporte Resumen (Top 8 eventos más críticos) de ${est.nombre_completo}`}
+                          >
+                            <Sparkles className="w-4 h-4 text-amber-400" />
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -1821,6 +2222,283 @@ export const DashboardAutoridades: React.FC = () => {
         </div>
       )}
 
+      {/* ============================================================== */}
+      {/* VISTA 4: GESTIÓN DE CURSO Y MATERIALES ESCOLARES (DOCENTE)      */}
+      {/* ============================================================== */}
+      {seccionActiva === 'CURSO_DOCENTE' && (
+        <div className="space-y-6 animate-in fade-in duration-200">
+          
+          {/* Header del Curso Seleccionado */}
+          <div className="glass-panel p-6 rounded-3xl border border-indigo-500/20 bg-gradient-to-r from-slate-900 to-indigo-950/30 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                  <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>{cursoActivo ? cursoActivo.nivel_academico : 'Gestión Académica'}</span>
+                </span>
+                {cursoActivo && (
+                  <span className="text-xs font-mono text-slate-400">
+                    ID: {cursoActivo.id_curso.slice(0, 8)}
+                  </span>
+                )}
+              </div>
+              <h1 className="text-2xl md:text-3xl font-bold font-heading text-white flex items-center gap-3">
+                <span>{cursoActivo ? cursoActivo.nombre_curso : 'Selecciona un Curso'}</span>
+              </h1>
+              <p className="text-slate-400 text-xs max-w-2xl">
+                Sube guías, tareas y lecturas adaptativas para este curso. Los estudiantes matriculados en este grado accederán a tus documentos con sus respectivas indicaciones de tarea y evaluación.
+              </p>
+            </div>
+
+            {cursoActivo && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => cargarMaterialesCurso(cursoActivo.id_curso)}
+                  disabled={cargandoMateriales}
+                  className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${cargandoMateriales ? 'animate-spin' : ''}`} />
+                  <span>Actualizar</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Si no hay curso seleccionado, mostrar selector rápido */}
+          {!cursoActivo ? (
+            <div className="glass-panel p-12 text-center rounded-3xl border border-slate-800 space-y-4">
+              <FolderOpen className="w-12 h-12 text-indigo-400 mx-auto" />
+              <h3 className="text-lg font-bold text-white">Selecciona uno de tus cursos asignados</h3>
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                Elige un curso del menú desplegable superior o de la siguiente lista para gestionar sus documentos:
+              </p>
+              <div className="flex flex-wrap justify-center gap-3 pt-2">
+                {misCursos.map((c) => (
+                  <button
+                    key={c.id_curso}
+                    onClick={() => seleccionarCursoDocente(c)}
+                    className="px-4 py-2.5 bg-slate-900 hover:bg-indigo-600/30 border border-slate-700 hover:border-indigo-500/50 text-white rounded-2xl text-xs font-bold transition flex items-center gap-2 cursor-pointer shadow-lg"
+                  >
+                    <BookOpen className="w-4 h-4 text-cyan-400" />
+                    <span>{c.nombre_curso}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 font-mono">
+                      {c.total_materiales} docs
+                    </span>
+                  </button>
+                ))}
+                {misCursos.length === 0 && (
+                  <p className="text-xs text-amber-400 font-semibold">
+                    No tienes cursos asignados actualmente por el Superadministrador.
+                  </p>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              
+              {/* Columna Izquierda: Formulario de Subida de Tarea / Documento */}
+              <div className="lg:col-span-5 space-y-6">
+                <div className="glass-panel p-6 rounded-3xl border border-slate-800 space-y-4 bg-slate-900/60">
+                  <div className="border-b border-slate-800/80 pb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Upload className="w-4 h-4 text-cyan-400" />
+                      <h3 className="text-sm font-bold text-white">Publicar Nueva Tarea o Documento</h3>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-500">Auto PDF</span>
+                  </div>
+
+                  <form onSubmit={handleSubirMaterial} className="space-y-4 text-xs">
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1">
+                        Título de la Tarea o Lectura <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={formNuevoMaterial.titulo}
+                        onChange={(e) => setFormNuevoMaterial({ ...formNuevoMaterial, titulo: e.target.value })}
+                        placeholder="ej: Lectura Guiada - Sistema Solar y Órbitas"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-400"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1">
+                        Instrucciones / Descripción de la Tarea (Visible para los Alumnos)
+                      </label>
+                      <textarea
+                        rows={4}
+                        value={formNuevoMaterial.descripcion_tarea}
+                        onChange={(e) => setFormNuevoMaterial({ ...formNuevoMaterial, descripcion_tarea: e.target.value })}
+                        placeholder="ej: Leer con calma las páginas 1 a 4. Al finalizar, responder mentalmente las preguntas destacadas en amarillo. Se evaluará tu enfoque ocular y estabilidad postural durante toda la lectura."
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-cyan-400 resize-none leading-relaxed"
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Esta indicación aparecerá en un recuadro destacado sobre el visor del documento cuando el estudiante lo abra.
+                      </p>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 font-semibold mb-1">
+                        Archivo de Estudio (PDF, Word, PPTX o Imagen) <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="file"
+                        accept=".pdf,.docx,.pptx,.jpg,.jpeg,.png"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0] || null;
+                          setFormNuevoMaterial({ ...formNuevoMaterial, archivo: file });
+                        }}
+                        className="w-full text-slate-400 text-xs file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer bg-slate-950 p-2 rounded-xl border border-slate-800"
+                        required
+                      />
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Formatos soportados: PDF, Word (.docx), PowerPoint (.pptx), imágenes (.jpg, .png).
+                      </p>
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={subiendoMaterial}
+                      className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+                    >
+                      {subiendoMaterial ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Convirtiendo y Publicando...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-4 h-4" />
+                          <span>Publicar en {cursoActivo.nombre_curso}</span>
+                        </>
+                      )}
+                    </button>
+                  </form>
+                </div>
+              </div>
+
+              {/* Columna Derecha: Nómina de Documentos Publicados */}
+              <div className="lg:col-span-7 space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-indigo-400" />
+                    <span>Materiales Publicados ({materialesCurso.length})</span>
+                  </h3>
+                  <span className="text-[11px] text-slate-400 font-mono">
+                    Curso: {cursoActivo.nombre_curso}
+                  </span>
+                </div>
+
+                {cargandoMateriales ? (
+                  <div className="glass-panel p-12 text-center rounded-3xl border border-slate-800">
+                    <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin mx-auto mb-2" />
+                    <p className="text-xs text-slate-400">Recuperando materiales del curso...</p>
+                  </div>
+                ) : materialesCurso.length > 0 ? (
+                  <div className="space-y-4">
+                    {materialesCurso.map((mat) => (
+                      <div
+                        key={mat.id_material}
+                        className="glass-panel p-5 rounded-3xl border border-slate-800 hover:border-slate-700 bg-slate-900/70 transition space-y-3.5"
+                      >
+                        {/* Cabecera del Documento */}
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <div className="w-10 h-10 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0 mt-0.5">
+                              <BookOpen className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-bold text-white line-clamp-1">{mat.titulo}</h4>
+                              <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-slate-400 font-mono">
+                                <span className="text-cyan-400">{mat.nombre_archivo_original}</span>
+                                <span>•</span>
+                                <span>{mat.tamano_kb.toFixed(1)} KB</span>
+                                <span>•</span>
+                                <span>{mat.fecha_subida}</span>
+                              </div>
+                              <span className="inline-block mt-1 text-[10px] font-bold text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-500/20">
+                                Docente: {mat.docente_nombre}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Botones de Acción */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              onClick={() => {
+                                setModalVisualizarPdf({
+                                  abierto: true,
+                                  url: mat.url_pdf,
+                                  titulo: mat.titulo,
+                                  descripcion: mat.descripcion_tarea || ''
+                                });
+                              }}
+                              className="p-2 bg-slate-800 hover:bg-cyan-500/20 text-slate-300 hover:text-cyan-300 rounded-xl transition cursor-pointer border border-slate-700"
+                              title="Visualizar documento en PDF"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                setModalEditarMaterial({
+                                  abierto: true,
+                                  material: mat,
+                                  titulo: mat.titulo,
+                                  descripcion_tarea: mat.descripcion_tarea || '',
+                                  nuevoArchivo: null
+                                });
+                              }}
+                              className="p-2 bg-slate-800 hover:bg-amber-500/20 text-slate-300 hover:text-amber-300 rounded-xl transition cursor-pointer border border-slate-700"
+                              title="Editar tarea, descripción o reemplazar documento"
+                            >
+                              <Edit3 className="w-3.5 h-3.5" />
+                            </button>
+
+                            <button
+                              onClick={() => handleEliminarMaterial(mat)}
+                              className="p-2 bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 rounded-xl transition cursor-pointer border border-slate-700"
+                              title="Eliminar documento del curso"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Banner Destacado de Instrucciones / Descripción de la Tarea */}
+                        {mat.descripcion_tarea && (
+                          <div className="p-3.5 bg-slate-950/80 rounded-2xl border border-indigo-500/30 space-y-1">
+                            <div className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-400">
+                              <FileText className="w-3.5 h-3.5" />
+                              <span>Instrucciones / Descripción de la Tarea:</span>
+                            </div>
+                            <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed">
+                              {mat.descripcion_tarea}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="glass-panel p-10 text-center rounded-3xl border border-slate-800 space-y-3 bg-slate-900/40">
+                    <FileText className="w-10 h-10 text-slate-600 mx-auto" />
+                    <h4 className="text-sm font-bold text-white">No hay materiales publicados</h4>
+                    <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                      Aún no has compartido documentos con los estudiantes de {cursoActivo.nombre_curso}. Utiliza el formulario de la izquierda para publicar tu primer material.
+                    </p>
+                  </div>
+                )}
+
+              </div>
+
+            </div>
+          )}
+
+        </div>
+      )}
+
       {/* Modal de Reclasificación / Actualización Diagnóstica */}
       {modalEditar && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md">
@@ -1856,21 +2534,27 @@ export const DashboardAutoridades: React.FC = () => {
                   onChange={(e) => setFormEdicion({ ...formEdicion, grado_escolar: e.target.value })}
                   className="w-full bg-slate-950 border border-slate-700 text-white rounded-xl px-3 py-2 text-xs outline-none focus:border-cyan-400"
                 >
-                  <option value="1º de Secundaria">1º de Secundaria</option>
-                  <option value="2º de Secundaria">2º de Secundaria</option>
-                  <option value="3º de Secundaria">3º de Secundaria</option>
-                  <option value="4º de Secundaria">4º de Secundaria</option>
-                  <option value="5º de Secundaria">5º de Secundaria</option>
-                  <option value="6º de Secundaria">6º de Secundaria</option>
+                  {listaCursos.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">Clasificación DSM-5-TR / Control</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-slate-300 font-semibold">Clasificación DSM-5-TR / Control</label>
+                  {!tienePermiso('EDITAR_CLASIFICACION_CLINICA') && (
+                    <span className="text-[10px] text-amber-400 font-medium">🔒 Requiere autorización clínica DSM-5</span>
+                  )}
+                </div>
                 <select
                   value={formEdicion.subtipo_tdah}
                   onChange={(e) => setFormEdicion({ ...formEdicion, subtipo_tdah: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-700 text-amber-300 font-semibold rounded-xl px-3 py-2 text-xs outline-none focus:border-amber-400"
+                  disabled={!tienePermiso('EDITAR_CLASIFICACION_CLINICA')}
+                  title={!tienePermiso('EDITAR_CLASIFICACION_CLINICA') ? 'Requiere autorización clínica para reclasificar subtipos DSM-5 (EDITAR_CLASIFICACION_CLINICA)' : 'Seleccionar clasificación clínica o grupo control'}
+                  className={`w-full bg-slate-950 border border-slate-700 text-amber-300 font-semibold rounded-xl px-3 py-2 text-xs outline-none focus:border-amber-400 ${
+                    !tienePermiso('EDITAR_CLASIFICACION_CLINICA') ? 'opacity-50 cursor-not-allowed bg-slate-900' : ''
+                  }`}
                 >
                   <option value="CONTROL">Sin Diagnóstico Previo / Grupo Control (Neurotípico)</option>
                   <option value="F90_2">F90.2: Presentación Combinada (Déficit + Hiperactividad)</option>
@@ -1911,6 +2595,155 @@ export const DashboardAutoridades: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Modal para Editar Material / Tarea Escolar */}
+      {modalEditarMaterial.abierto && modalEditarMaterial.material && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="glass-panel p-6 rounded-3xl border border-slate-700 max-w-lg w-full space-y-5 bg-slate-900/95 shadow-2xl relative">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Edit3 className="w-5 h-5 text-indigo-400" />
+                <div>
+                  <h3 className="text-base font-bold text-white">Editar Tarea / Documento</h3>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Archivo: <span className="text-cyan-400 font-mono">{modalEditarMaterial.material.nombre_archivo_original}</span>
+                  </p>
+                </div>
+              </div>
+              <button 
+                onClick={() => setModalEditarMaterial({ abierto: false, material: null, titulo: '', descripcion_tarea: '', nuevoArchivo: null })}
+                className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleGuardarEdicionMaterial} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Título de la Tarea o Material</label>
+                <input 
+                  type="text" 
+                  value={modalEditarMaterial.titulo}
+                  onChange={(e) => setModalEditarMaterial({ ...modalEditarMaterial, titulo: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none focus:border-cyan-400"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Instrucciones o Indicaciones de la Tarea (Visible para los Alumnos)
+                </label>
+                <textarea 
+                  rows={4}
+                  value={modalEditarMaterial.descripcion_tarea}
+                  onChange={(e) => setModalEditarMaterial({ ...modalEditarMaterial, descripcion_tarea: e.target.value })}
+                  placeholder="Escribe las instrucciones detalladas de qué deben hacer los estudiantes con esta lectura o tarea..."
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white outline-none focus:border-cyan-400 resize-none leading-relaxed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Reemplazar Archivo Existente (Opcional)
+                </label>
+                <input 
+                  type="file"
+                  accept=".pdf,.docx,.pptx,.jpg,.jpeg,.png"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] || null;
+                    setModalEditarMaterial({ ...modalEditarMaterial, nuevoArchivo: f });
+                  }}
+                  className="w-full text-slate-400 text-xs file:mr-3 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer bg-slate-950 p-2 rounded-xl border border-slate-800"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Deja este campo vacío si sólo deseas editar las instrucciones de la tarea o el título.
+                </p>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setModalEditarMaterial({ abierto: false, material: null, titulo: '', descripcion_tarea: '', nuevoArchivo: null })}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={guardandoEdicionMaterial}
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-lg shadow-indigo-600/25 disabled:opacity-50"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  {guardandoEdicionMaterial ? 'Guardando...' : 'Guardar Cambios'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para Visualizar PDF en Modo Docente */}
+      {modalVisualizarPdf.abierto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="glass-panel rounded-3xl border border-slate-700 w-full max-w-5xl h-[92vh] flex flex-col bg-slate-900/95 shadow-2xl overflow-hidden">
+            {/* Header del Visor */}
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-indigo-400" />
+                <h3 className="text-sm font-bold text-white line-clamp-1">{modalVisualizarPdf.titulo}</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <a
+                  href={modalVisualizarPdf.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Abrir en Pestaña Externa</span>
+                </a>
+                <button
+                  onClick={() => setModalVisualizarPdf({ abierto: false, url: '', titulo: '', descripcion: '' })}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Banner de Instrucciones */}
+            {modalVisualizarPdf.descripcion && (
+              <div className="p-3.5 bg-indigo-950/40 border-b border-indigo-500/20 px-6 shrink-0 space-y-1">
+                <span className="text-[11px] font-bold text-indigo-300 flex items-center gap-1">
+                  <FileText className="w-3.5 h-3.5 text-cyan-400" /> Instrucciones del Docente:
+                </span>
+                <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed max-h-24 overflow-y-auto">
+                  {modalVisualizarPdf.descripcion}
+                </p>
+              </div>
+            )}
+
+            {/* Contenedor Iframe del PDF */}
+            <div className="flex-1 w-full bg-slate-950">
+              <iframe
+                src={`${modalVisualizarPdf.url}#toolbar=1&navpanes=0`}
+                className="w-full h-full border-0"
+                title={modalVisualizarPdf.titulo}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+        </div>
+      </main>
+
+      {/* Modal de Notificación In-App */}
+      <ModalNotificacion
+        config={modalNotificacion}
+        onCerrar={() => setModalNotificacion(prev => ({ ...prev, abierto: false }))}
+      />
 
     </div>
   );

@@ -300,6 +300,49 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
         ctx.translate(w, 0);
         ctx.scale(-1, 1);
 
+        // 0. Malla 3D Canónica (Óvalo Facial y Cejas Anatómicas)
+        const ovaloFacialIdx = [
+          10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+          397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+          172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10
+        ];
+        ctx.strokeStyle = modoProtegidoRef.current ? 'rgba(56, 189, 248, 0.45)' : 'rgba(56, 189, 248, 0.25)';
+        ctx.lineWidth = modoProtegidoRef.current ? 2.0 : 1.2;
+        ctx.beginPath();
+        ovaloFacialIdx.forEach((idx, i) => {
+          const pt = landmarks[idx];
+          if (pt) {
+            if (i === 0) ctx.moveTo(pt.x * w, pt.y * h);
+            else ctx.lineTo(pt.x * w, pt.y * h);
+          }
+        });
+        ctx.stroke();
+
+        // Cejas anatómicas
+        const cejaIzqIdx = [70, 63, 105, 66, 107];
+        const cejaDerIdx = [336, 296, 334, 293, 300];
+        ctx.strokeStyle = '#38BDF8';
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        cejaIzqIdx.forEach((idx, i) => {
+          const pt = landmarks[idx];
+          if (pt) {
+            if (i === 0) ctx.moveTo(pt.x * w, pt.y * h);
+            else ctx.lineTo(pt.x * w, pt.y * h);
+          }
+        });
+        ctx.stroke();
+
+        ctx.beginPath();
+        cejaDerIdx.forEach((idx, i) => {
+          const pt = landmarks[idx];
+          if (pt) {
+            if (i === 0) ctx.moveTo(pt.x * w, pt.y * h);
+            else ctx.lineTo(pt.x * w, pt.y * h);
+          }
+        });
+        ctx.stroke();
+
         // 1. Contorno de Ojo Izquierdo
         const ojoIzqIdx = [33, 160, 158, 133, 153, 144];
         ctx.strokeStyle = metricas.earPromedio < 0.20 ? '#F43F5E' : '#06B6D4';
@@ -825,7 +868,7 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold font-heading text-white flex items-center gap-2">
-            <Video className="w-5 h-5 text-emerald-400" /> Previsualización de Cámara 720p (HU-01)
+            <Video className="w-5 h-5 text-emerald-400" /> Previsualización de Cámara HD (720p)
           </h2>
           <p className="text-xs text-slate-400 mt-1">Valida el encuadre y el acceso a la webcam antes de iniciar la clase</p>
         </div>
@@ -920,7 +963,13 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
           playsInline
           muted
           style={{ transform: 'scaleX(-1)' }}
-          className={`w-full h-full object-cover transition-opacity duration-300 ${camaraActiva && !modoSimulado ? 'block opacity-100 z-10' : 'hidden opacity-0'}`}
+          className={`w-full h-full object-cover transition-opacity duration-300 ${
+            camaraActiva && !modoSimulado
+              ? modoProtegido
+                ? 'opacity-0 pointer-events-none'
+                : 'block opacity-100 z-10'
+              : 'hidden opacity-0'
+          }`}
         />
 
         {/* Canvas Overlay 1:1 sincronizado pixel a pixel con el video */}

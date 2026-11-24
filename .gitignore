@@ -49,9 +49,11 @@ backend/almacen_materiales/
 backend/test_reporte.pdf
 
 # Documentación de Tesis, Archivos Word, PDF y Temporales
+z-documentos generados/
 *.docx
 *.doc
 *.pdf
+*.pptx
 *.tmp
 ~$*
 test_*.docx
@@ -73,3 +75,10 @@ imagenes_*/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Cloudflare Tunnel Binary
+cloudflared.exe
+
+ENLACE_PUBLICO.txt
+
+ENLACE_FIJO_QR.txt

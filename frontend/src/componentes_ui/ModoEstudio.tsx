@@ -20,6 +20,7 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { apiCliente } from '../servicios_ws/api_cliente';
+import { ModalNotificacion, ModalNotificacionConfig } from './ModalNotificacion';
 
 export interface MaterialEstudioItem {
   id: string;
@@ -29,6 +30,16 @@ export interface MaterialEstudioItem {
   extension_original: string;
   tamano_kb: number;
   fecha_subida: string;
+  titulo?: string;
+  descripcion_tarea?: string;
+  es_docente?: boolean;
+  docente_nombre?: string;
+}
+
+export interface DocenteMaterialesGrupo {
+  id_docente: string;
+  nombre_docente: string;
+  materiales: MaterialEstudioItem[];
 }
 
 interface ModoEstudioProps {
@@ -55,8 +66,15 @@ export const ModoEstudio: React.FC<ModoEstudioProps> = ({
   onSnapshotPantalla
 }) => {
   const [materiales, setMateriales] = useState<MaterialEstudioItem[]>([]);
+  const [docentesGrupos, setDocentesGrupos] = useState<DocenteMaterialesGrupo[]>([]);
+  const [seccionMateriales, setSeccionMateriales] = useState<string>('PROPIOS'); // 'PROPIOS' o id_docente
   const [materialActivo, setMaterialActivo] = useState<MaterialEstudioItem | null>(null);
   const [cargandoLista, setCargandoLista] = useState<boolean>(false);
+  const [modalNotificacion, setModalNotificacion] = useState<ModalNotificacionConfig>({
+    abierto: false,
+    titulo: '',
+    mensaje: ''
+  });
   const [subiendoArchivo, setSubiendoArchivo] = useState<boolean>(false);
   const [mensajeEstado, setMensajeEstado] = useState<string | null>(null);
   const [errorSubida, setErrorSubida] = useState<string | null>(null);
@@ -85,7 +103,7 @@ export const ModoEstudio: React.FC<ModoEstudioProps> = ({
       return;
     }
 
-    const fullUrl = `http://127.0.0.1:8000${mat.url_pdf}`;
+    const fullUrl = mat.url_pdf;
     const ext = (mat.extension_original || '').toLowerCase();
 
     // 1. Si el archivo es una imagen directa
@@ -220,20 +238,53 @@ export const ModoEstudio: React.FC<ModoEstudioProps> = ({
     };
   }, [onInteraccionLectura]);
 
-  // Cargar lista de materiales disponibles del estudiante
+  // Cargar lista de materiales disponibles del estudiante (Propios + Materiales Asignados por sus Docentes)
   const cargarMateriales = async () => {
     setCargandoLista(true);
     try {
-      const resp = await apiCliente.get(`/materiales/estudiante/${codigoEstudiante}`);
-      if (resp.data && resp.data.materiales) {
-        setMateriales(resp.data.materiales);
-        // Si no hay ninguno activo y existen materiales, seleccionar el más reciente
-        if (!materialActivo && resp.data.materiales.length > 0) {
-          setMaterialActivo(resp.data.materiales[0]);
+      const resp = await apiCliente.get(`/materiales/estudiante-curso/${codigoEstudiante}`);
+      if (resp.data) {
+        const propios: MaterialEstudioItem[] = (resp.data.mis_documentos || []).map((m: any) => ({
+          ...m,
+          es_docente: false
+        }));
+        setMateriales(propios);
+
+        const grupos: DocenteMaterialesGrupo[] = (resp.data.docentes || []).map((doc: any) => ({
+          id_docente: doc.id_docente,
+          nombre_docente: doc.nombre_docente,
+          materiales: (doc.materiales || []).map((m: any) => ({
+            ...m,
+            es_docente: true,
+            docente_nombre: doc.nombre_docente
+          }))
+        }));
+        setDocentesGrupos(grupos);
+
+        // Si no hay ninguno activo, seleccionar el primero disponible
+        if (!materialActivo) {
+          if (propios.length > 0) {
+            setMaterialActivo(propios[0]);
+            setSeccionMateriales('PROPIOS');
+          } else if (grupos.length > 0 && grupos[0].materiales.length > 0) {
+            setMaterialActivo(grupos[0].materiales[0]);
+            setSeccionMateriales(grupos[0].id_docente);
+          }
         }
       }
     } catch (err) {
-      console.warn('[MODO ESTUDIO] Error cargando materiales:', err);
+      console.warn('[MODO ESTUDIO] Error cargando materiales por curso, usando fallback:', err);
+      try {
+        const resp2 = await apiCliente.get(`/materiales/estudiante/${codigoEstudiante}`);
+        if (resp2.data && resp2.data.materiales) {
+          setMateriales(resp2.data.materiales);
+          if (!materialActivo && resp2.data.materiales.length > 0) {
+            setMaterialActivo(resp2.data.materiales[0]);
+          }
+        }
+      } catch (err2) {
+        console.warn('[MODO ESTUDIO] Error en fallback de materiales:', err2);
+      }
     } finally {
       setCargandoLista(false);
     }
@@ -292,7 +343,13 @@ export const ModoEstudio: React.FC<ModoEstudioProps> = ({
         setMaterialActivo(null);
       }
     } catch (err) {
-      alert('No se pudo eliminar el material.');
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'ERROR',
+        titulo: 'Error al Eliminar',
+        mensaje: 'No se pudo eliminar el material seleccionado de tu biblioteca de estudio.',
+        textoBoton: 'Entendido'
+      });
     }
   };
 
@@ -489,61 +546,152 @@ export const ModoEstudio: React.FC<ModoEstudioProps> = ({
             )}
           </div>
 
-          {/* Biblioteca de Materiales del Estudiante */}
+          {/* Biblioteca de Materiales del Estudiante y Docentes */}
           <div className="glass-panel p-5 rounded-3xl border border-slate-800 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                <FolderOpen className="w-4 h-4 text-emerald-400" /> Mis Documentos ({materiales.length})
+                <FolderOpen className="w-4 h-4 text-emerald-400" /> Documentos de Estudio
               </h3>
               <button
                 onClick={cargarMateriales}
                 disabled={cargandoLista}
-                className="text-[11px] text-slate-400 hover:text-cyan-400 transition"
+                className="text-[11px] text-slate-400 hover:text-cyan-400 transition cursor-pointer"
                 title="Actualizar lista"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${cargandoLista ? 'animate-spin' : ''}`} />
               </button>
             </div>
 
-            {materiales.length === 0 ? (
-              <div className="text-center py-6 text-slate-500 text-xs">
-                No tienes documentos cargados aún. Sube tu primer PDF, Word o PowerPoint arriba.
-              </div>
-            ) : (
-              <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
-                {materiales.map((mat) => {
-                  const activo = materialActivo?.nombre_pdf === mat.nombre_pdf;
-                  return (
-                    <div
-                      key={mat.id || mat.nombre_pdf}
-                      onClick={() => setMaterialActivo(mat)}
-                      className={`p-3 rounded-xl border transition flex items-center justify-between gap-2 cursor-pointer ${
-                        activo
-                          ? 'bg-cyan-500/15 border-cyan-500/50 text-white shadow-md shadow-cyan-500/5'
-                          : 'bg-slate-900/60 border-slate-800 text-slate-300 hover:bg-slate-900 hover:text-white'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="shrink-0">{getIconoTipo(mat.extension_original || 'pdf')}</div>
-                        <div className="truncate text-left">
-                          <p className="text-xs font-semibold truncate leading-tight">{mat.nombre_archivo}</p>
-                          <p className="text-[10px] text-slate-400 font-mono mt-0.5">
-                            {mat.tamano_kb} KB • {mat.fecha_subida}
-                          </p>
-                        </div>
-                      </div>
+            {/* Pestañas de Carpetas: Mis Documentos vs Docentes */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 custom-scrollbar border-b border-slate-800/80">
+              <button
+                type="button"
+                onClick={() => setSeccionMateriales('PROPIOS')}
+                className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                  seccionMateriales === 'PROPIOS'
+                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shadow-sm'
+                    : 'bg-slate-900/60 text-slate-400 hover:text-white border border-slate-800'
+                }`}
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Mis Documentos ({materiales.length})</span>
+              </button>
 
-                      <button
-                        onClick={(e) => eliminarArchivo(mat.nombre_pdf, e)}
-                        className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition shrink-0"
-                        title="Eliminar este archivo"
+              {docentesGrupos.map((doc) => (
+                <button
+                  key={doc.id_docente}
+                  type="button"
+                  onClick={() => setSeccionMateriales(doc.id_docente)}
+                  className={`px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                    seccionMateriales === doc.id_docente
+                      ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50 shadow-sm'
+                      : 'bg-slate-900/60 text-slate-400 hover:text-white border border-slate-800'
+                  }`}
+                >
+                  <BookOpen className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Prof. {doc.nombre_docente} ({doc.materiales.length})</span>
+                </button>
+              ))}
+            </div>
+
+            {/* Renderizado de Documentos según la Pestaña Seleccionada */}
+            {seccionMateriales === 'PROPIOS' ? (
+              materiales.length === 0 ? (
+                <div className="text-center py-6 text-slate-500 text-xs">
+                  No tienes documentos personales cargados. Puedes subir un PDF, Word o diapositiva arriba.
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {materiales.map((mat) => {
+                    const activo = materialActivo?.nombre_pdf === mat.nombre_pdf;
+                    return (
+                      <div
+                        key={mat.id || mat.nombre_pdf}
+                        onClick={() => setMaterialActivo(mat)}
+                        className={`p-3 rounded-xl border transition flex items-center justify-between gap-2 cursor-pointer ${
+                          activo
+                            ? 'bg-cyan-500/15 border-cyan-500/50 text-white shadow-md shadow-cyan-500/5'
+                            : 'bg-slate-900/60 border-slate-800 text-slate-300 hover:bg-slate-900 hover:text-white'
+                        }`}
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="shrink-0">{getIconoTipo(mat.extension_original || 'pdf')}</div>
+                          <div className="truncate text-left">
+                            <p className="text-xs font-semibold truncate leading-tight">{mat.nombre_archivo}</p>
+                            <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                              {mat.tamano_kb} KB • {mat.fecha_subida}
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={(e) => eliminarArchivo(mat.nombre_pdf, e)}
+                          className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/10 transition shrink-0 cursor-pointer"
+                          title="Eliminar este archivo"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )
+            ) : (
+              // Vista de Materiales del Docente Seleccionado
+              (() => {
+                const grupoDoc = docentesGrupos.find((g) => g.id_docente === seccionMateriales);
+                const matsDocente = grupoDoc?.materiales || [];
+                if (matsDocente.length === 0) {
+                  return (
+                    <div className="text-center py-6 text-slate-500 text-xs">
+                      El Prof. {grupoDoc?.nombre_docente || 'Docente'} aún no ha subido tareas para tu curso.
                     </div>
                   );
-                })}
-              </div>
+                }
+                return (
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {matsDocente.map((mat) => {
+                      const activo = materialActivo?.nombre_pdf === mat.nombre_pdf;
+                      return (
+                        <div
+                          key={mat.id || mat.nombre_pdf}
+                          onClick={() => setMaterialActivo(mat)}
+                          className={`p-3 rounded-xl border transition flex items-center justify-between gap-2 cursor-pointer ${
+                            activo
+                              ? 'bg-indigo-600/20 border-indigo-500/50 text-white shadow-md shadow-indigo-600/10'
+                              : 'bg-slate-900/60 border-slate-800 text-slate-300 hover:bg-slate-900 hover:text-white'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="shrink-0">
+                              <BookOpen className="w-4 h-4 text-cyan-400" />
+                            </div>
+                            <div className="truncate text-left">
+                              <p className="text-xs font-semibold truncate leading-tight">
+                                {mat.titulo || mat.nombre_archivo}
+                              </p>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-bold border border-indigo-500/30">
+                                  Tarea Docente
+                                </span>
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  {mat.tamano_kb} KB
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {mat.descripcion_tarea && (
+                            <span className="p-1 rounded bg-slate-800 text-indigo-400 shrink-0" title="Contiene instrucciones de tarea">
+                              <FileText className="w-3.5 h-3.5" />
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()
             )}
           </div>
 
@@ -579,7 +727,7 @@ export const ModoEstudio: React.FC<ModoEstudioProps> = ({
 
               {materialActivo && (
                 <a
-                  href={`http://127.0.0.1:8000${materialActivo.url_pdf}`}
+                  href={materialActivo.url_pdf}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-slate-300 hover:text-white hover:border-slate-500 transition text-xs font-semibold flex items-center gap-1.5 shrink-0"
@@ -589,11 +737,32 @@ export const ModoEstudio: React.FC<ModoEstudioProps> = ({
               )}
             </div>
 
+            {/* Banner Superior de Instrucciones / Descripción de la Tarea del Docente */}
+            {materialActivo?.descripcion_tarea && (
+              <div className="p-4 bg-gradient-to-r from-indigo-950/80 via-slate-900 to-indigo-950/60 border-b border-indigo-500/30 px-6 shrink-0 space-y-1.5 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></span>
+                    <span className="text-xs font-bold font-heading text-indigo-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-cyan-400" />
+                      Instrucciones de la Tarea {materialActivo.docente_nombre ? `— Prof. ${materialActivo.docente_nombre}` : ''}
+                    </span>
+                  </div>
+                  <span className="text-[10px] px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-bold border border-indigo-500/30">
+                    Lectura Monitoreada
+                  </span>
+                </div>
+                <p className="text-xs text-slate-200 whitespace-pre-wrap leading-relaxed max-h-24 overflow-y-auto pr-1 font-normal">
+                  {materialActivo.descripcion_tarea}
+                </p>
+              </div>
+            )}
+
             {/* Contenedor del PDF Embebido */}
             <div className="flex-1 bg-slate-900 relative">
               {materialActivo ? (
                 <iframe
-                  src={`http://127.0.0.1:8000${materialActivo.url_pdf}#toolbar=1&navpanes=0`}
+                  src={`${materialActivo.url_pdf}#toolbar=1&navpanes=0`}
                   title="Visor de Documentos de Estudio"
                   className="w-full h-full border-0 bg-slate-950"
                 />
@@ -654,6 +823,12 @@ export const ModoEstudio: React.FC<ModoEstudioProps> = ({
           </div>
         </div>
       )}
+
+      {/* Modal de Notificación */}
+      <ModalNotificacion
+        config={modalNotificacion}
+        onCerrar={() => setModalNotificacion(prev => ({ ...prev, abierto: false }))}
+      />
 
     </div>
   );

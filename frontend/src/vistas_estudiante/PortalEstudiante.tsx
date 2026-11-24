@@ -16,20 +16,25 @@ import {
   Database,
   Cpu,
   Code2,
-  EyeOff
+  EyeOff,
+  LogOut,
+  GraduationCap,
+  X
 } from 'lucide-react';
 import { useAuth } from '../contexto/AuthContext';
 import { PrevisualizadorCamara, PrevisualizadorCamaraHandle } from '../componentes_ui/PrevisualizadorCamara';
 import { BorderGlow } from '../componentes_ui/BorderGlow';
 import { AvatarHUD } from '../componentes_ui/AvatarHUD';
 import { ModoEstudio } from '../componentes_ui/ModoEstudio';
+import { ModalNotificacion, ModalNotificacionConfig } from '../componentes_ui/ModalNotificacion';
 import { apiCliente } from '../servicios_ws/api_cliente';
 import { AcumuladorCalibracionBiometrica } from '../servicios_ws/calculo_biometrico';
 
 type SeccionEstudiante = 'DASHBOARD' | 'MODO_ESTUDIO';
 
 export const PortalEstudiante: React.FC = () => {
-  const { usuario } = useAuth();
+  const { usuario, logout } = useAuth();
+  const [sidebarMobileAbierta, setSidebarMobileAbierta] = useState<boolean>(false);
 
   // Control de Navegación del Estudiante persistente ante recargas F5
   const [seccionActiva, setSeccionActivaState] = useState<SeccionEstudiante>(() => {
@@ -43,6 +48,13 @@ export const PortalEstudiante: React.FC = () => {
   };
 
   const [menuHamburguesaAbierto, setMenuHamburguesaAbierto] = useState<boolean>(false);
+
+  // Modal de notificación profesional en UI (reemplazo de alert de navegador)
+  const [modalNotificacion, setModalNotificacion] = useState<ModalNotificacionConfig>({
+    abierto: false,
+    titulo: '',
+    mensaje: ''
+  });
   const [forzarEncendidoCamara, setForzarEncendidoCamara] = useState<boolean>(false);
   const [ultimoFrameSnapshot, setUltimoFrameSnapshot] = useState<string | null>(null);
   const [tsUltimaInteraccion, setTsUltimaInteraccion] = useState<number>(0);
@@ -82,10 +94,10 @@ export const PortalEstudiante: React.FC = () => {
         console.warn('[PORTAL ESTUDIANTE] No se pudo cargar el perfil específico desde BD:', err);
       }
     };
-    if (usuario?.codigo_estudiante) {
+    if (usuario) {
       cargarPerfilDesdeBD();
     }
-  }, [usuario?.codigo_estudiante]);
+  }, [usuario]);
 
   // Formateador visual del Subtipo Clínico DSM-5-TR
   const getEtiquetaSubtipo = (subtipo?: string) => {
@@ -164,7 +176,13 @@ export const PortalEstudiante: React.FC = () => {
       }, 1000);
     } else if (segundosRestantes === 0) {
       setCamaraActiva(false);
-      alert('🔒 Límite de seguridad alcanzado: La cámara se ha apagado automáticamente al cumplir 2 horas.');
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'ADVERTENCIA',
+        titulo: 'Límite de Tiempo Alcanzado',
+        mensaje: 'Por normas de salud visual y ergonomía cognitiva, la cámara se ha desactivado automáticamente al completar las 2 horas continuas de monitoreo.',
+        textoBoton: 'Entendido'
+      });
     }
 
     return () => clearInterval(interval);
@@ -183,7 +201,8 @@ export const PortalEstudiante: React.FC = () => {
     if (!camaraActiva) return;
 
     const codigoEst = usuario?.codigo_estudiante || 'EST-2026-001';
-    const wsUrl = `ws://127.0.0.1:8000/ws/monitoreo/${codigoEst}`;
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProto}//${window.location.host}/ws/monitoreo/${codigoEst}`;
     let socket: WebSocket | null = null;
 
     try {
@@ -404,107 +423,198 @@ export const PortalEstudiante: React.FC = () => {
     try {
       await apiCliente.post(`/monitoreo/finalizar-sesion/${cod}`);
       setCamaraActiva(false);
-      alert('✅ Sesión de monitoreo finalizada y guardada exitosamente en la base de datos.');
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'EXITO',
+        titulo: 'Sesión Finalizada con Éxito',
+        mensaje: 'La sesión de monitoreo fue finalizada y todas las métricas atencionales han sido guardadas y consolidadas en la base de datos.',
+        detalles: `Estudiante: ${perfilEstudiante?.nombre_completo || usuario?.username || 'Estudiante'} • Código: ${cod}`,
+        textoBoton: 'Aceptar'
+      });
     } catch (err) {
       console.warn('Error finalizando sesión en servidor:', err);
       setCamaraActiva(false);
+      setModalNotificacion({
+        abierto: true,
+        tipo: 'ADVERTENCIA',
+        titulo: 'Sesión Concluida',
+        mensaje: 'La cámara fue apagada. Si el servidor no respondió, los datos en memoria local fueron protegidos.',
+        textoBoton: 'Aceptar'
+      });
     }
   };
 
   return (
-    <div className="relative min-h-[calc(100vh-5rem)] p-6 transition-all duration-500">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row font-sans selection:bg-emerald-500 selection:text-slate-950">
       {/* Componente Border Glow Acelerado por GPU (REQ-12, REQ-14, REQ-35) */}
       <BorderGlow estado={estadoActual} activo={mostrarBorderGlow} />
 
       {/* Componente Avatar HUD Learning Buddy (REQ-02, REQ-15, REQ-16) */}
       <AvatarHUD estado={estadoActual} iai={iaiSimulado} />
-      
-      {/* Header del Portal */}
-      <div className="max-w-6xl mx-auto space-y-6">
 
-        {/* Menú Hamburguesa Superior del Estudiante */}
-        <div className="flex items-center justify-between gap-4 glass-panel px-6 py-4 rounded-3xl border border-slate-800 relative z-30">
-          <div className="flex items-center gap-4">
-            {/* Botón Hamburguesa */}
+      {/* Overlay para móvil */}
+      {sidebarMobileAbierta && (
+        <div
+          onClick={() => setSidebarMobileAbierta(false)}
+          className="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-sm md:hidden"
+        />
+      )}
+
+      {/* ========================================================================= */}
+      {/* MENÚ LATERAL PERSISTENTE (SIDEBAR DARK GLASS)                            */}
+      {/* ========================================================================= */}
+      <aside className={`fixed md:sticky top-0 z-50 h-screen w-72 bg-slate-900/95 border-r border-slate-800/80 flex flex-col justify-between shrink-0 p-5 backdrop-blur-xl transition-transform duration-300 ${
+        sidebarMobileAbierta ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+      }`}>
+        <div className="space-y-6 overflow-y-auto pr-1">
+          
+          {/* Brand Header */}
+          <div className="flex items-center gap-3 px-2 py-1">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-500 to-cyan-400 p-0.5 flex items-center justify-center shadow-lg shadow-emerald-500/25">
+              <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
+                <GraduationCap className="w-5 h-5 text-emerald-400" />
+              </div>
+            </div>
+            <div className="flex-1 min-w-0">
+              <h1 className="text-sm font-black tracking-wider text-white flex items-center gap-1.5 font-mono">
+                NEUROFOCUS<span className="text-emerald-400">AI</span>
+              </h1>
+              <span className="text-[10px] uppercase font-bold tracking-widest text-emerald-300/80 block">
+                Portal Estudiantil
+              </span>
+            </div>
+            {/* Botón cerrar para móvil */}
             <button
-              onClick={() => setMenuHamburguesaAbierto(!menuHamburguesaAbierto)}
-              className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:border-slate-700 transition flex items-center gap-2 cursor-pointer"
-              title="Abrir menú de navegación"
+              onClick={() => setSidebarMobileAbierta(false)}
+              className="md:hidden p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
             >
-              <Menu className="w-5 h-5 text-cyan-400" />
-              <span className="text-xs font-semibold hidden sm:inline">Menú de Navegación</span>
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Menú de Navegación Lateral */}
+          <nav className="space-y-1.5 text-xs font-semibold">
+            <button
+              onClick={() => { setSeccionActiva('DASHBOARD'); setSidebarMobileAbierta(false); }}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl transition cursor-pointer text-left ${
+                seccionActiva === 'DASHBOARD'
+                  ? 'bg-emerald-500 text-slate-950 font-bold shadow-lg shadow-emerald-500/25'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <LayoutDashboard className="w-4 h-4 shrink-0 text-cyan-400" />
+              <span>Dashboard y Calibración</span>
             </button>
 
-            {/* Badge de Sección Activa */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400 font-medium">Sección:</span>
-              <span
-                className={`px-3 py-1 rounded-xl text-xs font-bold border transition ${
-                  seccionActiva === 'DASHBOARD'
-                    ? 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
-                    : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-                }`}
-              >
-                {seccionActiva === 'DASHBOARD' ? 'Dashboard y Calibración' : 'Modo Estudio (Lector de Documentos)'}
-              </span>
-            </div>
-          </div>
+            <button
+              onClick={() => { setSeccionActiva('MODO_ESTUDIO'); setSidebarMobileAbierta(false); }}
+              className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl transition cursor-pointer text-left ${
+                seccionActiva === 'MODO_ESTUDIO'
+                  ? 'bg-emerald-500 text-slate-950 font-bold shadow-lg shadow-emerald-500/25'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+              }`}
+            >
+              <BookOpen className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span>Modo Estudio (Documentos)</span>
+            </button>
+          </nav>
 
-          {/* Estado de Cámara en la barra superior */}
-          <div className="flex items-center gap-3">
-            {camaraActiva ? (
-              <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold">
+          {/* Widget Estado de Cámara en la Sidebar */}
+          <div className="p-3 bg-slate-950/70 rounded-2xl border border-slate-800 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono uppercase text-slate-400 tracking-wider font-bold">Cámara Web</span>
+              {camaraActiva ? (
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                Cámara Activa
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 text-slate-400 border border-slate-800 text-xs font-semibold">
-                Cámara en Espera
-              </span>
-            )}
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-slate-600"></span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {camaraActiva ? (
+                <div className="flex items-center gap-2 text-emerald-400 text-xs font-semibold">
+                  <Camera className="w-4 h-4" />
+                  <span>Transmitiendo en vivo</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-slate-400 text-xs font-semibold">
+                  <CameraOff className="w-4 h-4" />
+                  <span>Cámara en reposo</span>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Drawer / Desplegable del Menú Hamburguesa */}
-          {menuHamburguesaAbierto && (
-            <div className="absolute top-full left-6 mt-2 w-72 glass-panel p-3 rounded-2xl border border-slate-700 shadow-2xl bg-slate-950/95 backdrop-blur-xl z-50 space-y-1 animate-in fade-in zoom-in duration-150">
-              <button
-                onClick={() => {
-                  setSeccionActiva('DASHBOARD');
-                  setMenuHamburguesaAbierto(false);
-                }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                  seccionActiva === 'DASHBOARD'
-                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
-                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                }`}
-              >
-                <LayoutDashboard className="w-4 h-4 text-cyan-400" />
-                <div className="text-left">
-                  <p className="font-bold">Dashboard</p>
-                  <p className="text-[10px] text-slate-400">Calibración, perfil y cámara en vivo</p>
-                </div>
-              </button>
-
-              <button
-                onClick={() => {
-                  setSeccionActiva('MODO_ESTUDIO');
-                  setMenuHamburguesaAbierto(false);
-                }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
-                  seccionActiva === 'MODO_ESTUDIO'
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                    : 'text-slate-300 hover:bg-slate-800 hover:text-white'
-                }`}
-              >
-                <BookOpen className="w-4 h-4 text-emerald-400" />
-                <div className="text-left">
-                  <p className="font-bold">Modo Estudio</p>
-                  <p className="text-[10px] text-slate-400">Lector de PDF, Word, PowerPoint y JPG</p>
-                </div>
-              </button>
-            </div>
-          )}
+          {/* Subtipo Clínico DSM-5 */}
+          <div className="p-3 bg-slate-950/50 rounded-2xl border border-slate-800/80 space-y-1">
+            <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider block">Perfil DSM-5-TR:</span>
+            <p className="text-[11px] font-semibold text-slate-300 leading-snug">
+              {getEtiquetaSubtipo(perfilEstudiante?.subtipo_tdah || (usuario as any)?.subtipo_tdah).texto}
+            </p>
+          </div>
         </div>
+
+        {/* Footer del Menú Lateral: Perfil y Logout */}
+        <div className="pt-4 border-t border-slate-800/80 space-y-3">
+          <div className="p-3 bg-slate-950/60 rounded-2xl border border-slate-800 flex items-center justify-between">
+            <div className="truncate">
+              <p className="text-xs font-bold text-white truncate">{perfilEstudiante?.nombre_completo || usuario?.username}</p>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="text-[10px] text-emerald-400 font-mono font-bold">
+                  {usuario?.codigo_estudiante || 'EST-2026-001'}
+                </span>
+                <span className="text-[10px] text-slate-500">•</span>
+                <span className="text-[10px] text-slate-400 truncate">
+                  {perfilEstudiante?.grado_escolar || (usuario as any)?.grado_escolar || 'Secundaria'}
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={logout}
+              title="Cerrar sesión"
+              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-900 rounded-xl transition cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* ========================================================================= */}
+      {/* CONTENIDO PRINCIPAL                                                       */}
+      {/* ========================================================================= */}
+      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+        
+        {/* Topbar Superior */}
+        <header className="h-20 px-6 sm:px-8 border-b border-slate-800/80 bg-slate-900/40 backdrop-blur-md flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setSidebarMobileAbierta(true)}
+              className="md:hidden p-2 rounded-xl bg-slate-800 border border-slate-700 text-slate-300 hover:text-white cursor-pointer"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div>
+              <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                {seccionActiva === 'DASHBOARD' ? 'Dashboard y Calibración Biométrica' : 'Modo Estudio y Lector de Tareas'}
+              </h2>
+              <p className="text-[11px] text-slate-400 hidden sm:block">
+                {seccionActiva === 'DASHBOARD'
+                  ? 'Calibra tu línea base atencional (900 muestras) e inicia tu sesión de lectura'
+                  : 'Lee tus documentos PDF y revisa las tareas subidas por tus docentes'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-emerald-500/10 text-emerald-300 border border-emerald-500/30">
+              {usuario?.codigo_estudiante || 'EST-2026-001'}
+            </span>
+          </div>
+        </header>
+
+        {/* Contenedor Principal de Vistas */}
+        <div className="p-4 md:p-8 space-y-6 max-w-7xl mx-auto w-full flex-1">
 
         {/* VISTA 1: DASHBOARD (CÁMARA, CALIBRACIÓN Y MÉTRICAS) */}
         <div className={seccionActiva === 'DASHBOARD' ? 'space-y-8 animate-in fade-in duration-200' : 'fixed -top-[9999px] -left-[9999px] opacity-0 pointer-events-none w-[640px] h-[480px] overflow-hidden'}>
@@ -600,7 +710,7 @@ export const PortalEstudiante: React.FC = () => {
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-xl font-bold font-heading text-white flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-amber-400" /> Rutina de Calibración Base (30 seg - HU-03)
+                    <Sparkles className="w-5 h-5 text-amber-400" /> Rutina de Calibración Base (30 seg)
                   </h2>
                   <p className="text-xs text-slate-400 mt-1">Muestreo biométrico de 900 fotogramas para establecer la línea base individual</p>
                 </div>
@@ -665,16 +775,22 @@ export const PortalEstudiante: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Botón de Prueba Manual de Parpadeo voluntario para validación */}
-                  <div className="p-3 bg-slate-900/50 rounded-xl border border-slate-800/80 flex items-center justify-between text-xs">
-                    <span className="text-slate-400 text-[11px]">Prueba de validación: Simular pestañeo durante la calibración</span>
-                    <button
-                      onClick={simularParpadeoVoluntario}
-                      className="px-3 py-1.5 bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-300 border border-cyan-500/30 font-bold text-[11px] rounded-lg transition flex items-center gap-1"
-                    >
-                      <EyeOff className="w-3.5 h-3.5 text-cyan-400" /> Simular Parpadeo (EAR &lt; 0.20)
-                    </button>
-                  </div>
+                  {/* 
+                    [MODO DEPURACIÓN / DEMOSTRACIÓN JURADOS]
+                    Botón de Prueba Manual de Parpadeo voluntario (Oculto para producción).
+                    Para reactivarlo, retirar el envoltorio {false && (...)} o consultar README.md.
+                  */}
+                  {false && (
+                    <div className="p-3 bg-slate-900/50 rounded-xl border border-slate-800/80 flex items-center justify-between text-xs">
+                      <span className="text-slate-400 text-[11px]">Prueba de validación: Simular pestañeo durante la calibración</span>
+                      <button
+                        onClick={simularParpadeoVoluntario}
+                        className="px-3 py-1.5 bg-cyan-600/30 hover:bg-cyan-600/50 text-cyan-300 border border-cyan-500/30 font-bold text-[11px] rounded-lg transition flex items-center gap-1"
+                      >
+                        <EyeOff className="w-3.5 h-3.5 text-cyan-400" /> Simular Parpadeo (EAR &lt; 0.20)
+                      </button>
+                    </div>
+                  )}
 
                 </div>
               ) : (
@@ -748,13 +864,16 @@ export const PortalEstudiante: React.FC = () => {
                       <p className="text-slate-400 mt-0.5">La calibración calcula la media (μ) y desviación estándar (σ) para adaptar los algoritmos a la anatomía del estudiante.</p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-                      <button
-                        onClick={() => setMostrarCodigoAlgoritmo(!mostrarCodigoAlgoritmo)}
-                        className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-bold text-xs rounded-xl transition flex items-center gap-1.5 shrink-0"
-                      >
-                        <Code2 className="w-4 h-4 text-cyan-400" />
-                        {mostrarCodigoAlgoritmo ? 'Ocultar Algoritmo' : 'Ver Fórmulas del Algoritmo'}
-                      </button>
+                      {/* [MODO DEPURACIÓN / DEMOSTRACIÓN JURADOS] Botón de Fórmulas Matemáticas (Oculto para producción). */}
+                      {false && (
+                        <button
+                          onClick={() => setMostrarCodigoAlgoritmo(!mostrarCodigoAlgoritmo)}
+                          className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 font-bold text-xs rounded-xl transition flex items-center gap-1.5 shrink-0"
+                        >
+                          <Code2 className="w-4 h-4 text-cyan-400" />
+                          {mostrarCodigoAlgoritmo ? 'Ocultar Algoritmo' : 'Ver Fórmulas del Algoritmo'}
+                        </button>
+                      )}
 
                       <button
                         onClick={iniciarCalibracion}
@@ -770,8 +889,8 @@ export const PortalEstudiante: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Panel Expandible de Fórmulas Matemáticas y Código Fuente del Algoritmo (Sprint 2 / Tesis FICCT) */}
-                  {mostrarCodigoAlgoritmo && (
+                  {/* Panel Expandible de Fórmulas Matemáticas y Código Fuente del Algoritmo (Sprint 2 / Tesis FICCT) - Oculto para vista limpia de producción */}
+                  {false && mostrarCodigoAlgoritmo && (
                     <div className="p-5 bg-slate-950 rounded-2xl border border-cyan-500/30 space-y-4 text-xs font-mono">
                       <div className="flex items-center justify-between border-b border-slate-800 pb-3">
                         <span className="font-bold text-cyan-400 flex items-center gap-2">
@@ -991,36 +1110,42 @@ export const PortalEstudiante: React.FC = () => {
                 </div>
               </div>
 
-              {/* Botones de Prueba de Estados del IAI y Border Glow */}
-              <div className="pt-2 border-t border-slate-800/80 space-y-3">
-                <p className="text-xs font-semibold text-slate-400">Probar los 4 Estados del Capítulo 2 (Border Glow + Avatar):</p>
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(92); setEstadoActual(1); }}
-                    className="px-2.5 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-xl text-[11px] font-semibold transition"
-                  >
-                    Est 1: Hiperfoco (#00F5D4)
-                  </button>
-                  <button
-                    onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(72); setEstadoActual(2); }}
-                    className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-xl text-[11px] font-semibold transition"
-                  >
-                    Est 2: Sostenida (#2EC4B6)
-                  </button>
-                  <button
-                    onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(48); setEstadoActual(3); }}
-                    className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-[11px] font-semibold transition"
-                  >
-                    Est 3: Desvío (#FFB703)
-                  </button>
-                  <button
-                    onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(32); setEstadoActual(4); }}
-                    className="px-2.5 py-1.5 bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/30 rounded-xl text-[11px] font-semibold transition"
-                  >
-                    Est 4: Fatiga (#7209B7)
-                  </button>
+              {/* 
+                [MODO DEPURACIÓN / DEMOSTRACIÓN JURADOS]
+                Botones de Prueba de Estados del IAI y Border Glow (Ocultos para producción).
+                Para reactivarlos, retirar el envoltorio {false && (...)} o consultar README.md.
+              */}
+              {false && (
+                <div className="pt-2 border-t border-slate-800/80 space-y-3">
+                  <p className="text-xs font-semibold text-slate-400">Probar los 4 Estados del Capítulo 2 (Border Glow + Avatar):</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(92); setEstadoActual(1); }}
+                      className="px-2.5 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 rounded-xl text-[11px] font-semibold transition"
+                    >
+                      Est 1: Hiperfoco (#00F5D4)
+                    </button>
+                    <button
+                      onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(72); setEstadoActual(2); }}
+                      className="px-2.5 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-xl text-[11px] font-semibold transition"
+                    >
+                      Est 2: Sostenida (#2EC4B6)
+                    </button>
+                    <button
+                      onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(48); setEstadoActual(3); }}
+                      className="px-2.5 py-1.5 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl text-[11px] font-semibold transition"
+                    >
+                      Est 3: Desvío (#FFB703)
+                    </button>
+                    <button
+                      onClick={() => { setMostrarBorderGlow(true); setIaiSimulado(32); setEstadoActual(4); }}
+                      className="px-2.5 py-1.5 bg-violet-500/10 hover:bg-violet-500/20 text-violet-300 border border-violet-500/30 rounded-xl text-[11px] font-semibold transition"
+                    >
+                      Est 4: Fatiga (#7209B7)
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
           </div>
@@ -1069,7 +1194,14 @@ export const PortalEstudiante: React.FC = () => {
           </div>
         )}
 
-      </div>
+        </div>
+      </main>
+
+      {/* Modal de Notificación Elegante en App (Reemplazo de alert nativo) */}
+      <ModalNotificacion
+        config={modalNotificacion}
+        onCerrar={() => setModalNotificacion(prev => ({ ...prev, abierto: false }))}
+      />
     </div>
   );
 };

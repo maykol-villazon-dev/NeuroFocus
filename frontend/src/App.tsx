@@ -1,14 +1,48 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './contexto/AuthContext';
 import { LandingPage } from './vistas_publicas/LandingPage';
 import { PortalEstudiante } from './vistas_estudiante/PortalEstudiante';
 import { DashboardAutoridades } from './vistas_autoridades/DashboardAutoridades';
-import { ShieldCheck, LogOut, User, Lock, Sparkles, X, UserPlus, LogIn, AlertCircle } from 'lucide-react';
+import { DashboardSuperadmin } from './vistas_superadmin/DashboardSuperadmin';
+import { ModalTerminosCondiciones } from './componentes_ui/ModalTerminosCondiciones';
+import { apiCliente } from './servicios_ws/api_cliente';
+import { ShieldCheck, LogOut, User, Lock, Sparkles, X, UserPlus, LogIn, AlertCircle, Clock } from 'lucide-react';
 
 const MainApp: React.FC = () => {
-  const { usuario, logout, login, registro, cargando } = useAuth();
+  const { usuario, logout, login, registro, cargando, alertaSuspension, cerrarAlertaSuspension, tienePermiso } = useAuth();
   const [modalAuth, setModalAuth] = useState<'NONE' | 'LOGIN' | 'REGISTRO'>('NONE');
+  const [modalTerminosAbierto, setModalTerminosAbierto] = useState<boolean>(false);
+  const [modalCuentaPendiente, setModalCuentaPendiente] = useState<{
+    abierto: boolean;
+    username: string;
+    rol: string;
+  }>({
+    abierto: false,
+    username: '',
+    rol: ''
+  });
   const [errorAuth, setErrorAuth] = useState<string | null>(null);
+
+  // Catálogo dinámico de cursos y niveles académicos obtenido del backend
+  const [cursosDisponibles, setCursosDisponibles] = useState<string[]>([
+    '1º de Secundaria', '2º de Secundaria', '3º de Secundaria',
+    '4º de Secundaria', '5º de Secundaria', '6º de Secundaria',
+    'Universitario - Pregrado'
+  ]);
+
+  useEffect(() => {
+    const cargarCursos = async () => {
+      try {
+        const resp = await apiCliente.get('/auth/cursos-activos');
+        if (resp.data && Array.isArray(resp.data) && resp.data.length > 0) {
+          setCursosDisponibles(resp.data);
+        }
+      } catch (e) {
+        console.warn('Fallback a cursos por defecto:', e);
+      }
+    };
+    cargarCursos();
+  }, []);
   
   // Generador dinámico de Código de Estudiante institucional
   const generarCodigoEstudiante = () => {
@@ -25,7 +59,8 @@ const MainApp: React.FC = () => {
     rol: rol,
     codigo_estudiante: rol === 'ESTUDIANTE' ? generarCodigoEstudiante() : '',
     grado_escolar: '1º de Secundaria',
-    subtipo_tdah: 'CONTROL'
+    subtipo_tdah: 'CONTROL',
+    acepto_terminos: false
   });
 
   // Estado limpio para Login (vacío para escribir desde cero)
@@ -36,7 +71,8 @@ const MainApp: React.FC = () => {
     password: '',
     rol: 'ESTUDIANTE',
     codigo_estudiante: '',
-    grado_escolar: '1º de Secundaria'
+    grado_escolar: '1º de Secundaria',
+    acepto_terminos: false
   });
 
   // State for Login/Register Form
@@ -87,6 +123,11 @@ const MainApp: React.FC = () => {
       return;
     }
 
+    if (!formAuth.acepto_terminos) {
+      setErrorAuth('Debes aceptar los Términos y Condiciones y la Política de Privacidad correspondiente a tu rol para crear la cuenta.');
+      return;
+    }
+
     const res = await registro({
       username: formAuth.username,
       password: formAuth.password,
@@ -95,10 +136,18 @@ const MainApp: React.FC = () => {
       nombre_completo: formAuth.nombre_completo,
       codigo_estudiante: formAuth.rol === 'ESTUDIANTE' ? formAuth.codigo_estudiante || undefined : undefined,
       grado_escolar: formAuth.rol === 'ESTUDIANTE' ? formAuth.grado_escolar || undefined : undefined,
-      subtipo_tdah: formAuth.rol === 'ESTUDIANTE' ? (formAuth as any).subtipo_tdah || 'F90_2' : undefined
+      subtipo_tdah: formAuth.rol === 'ESTUDIANTE' ? (formAuth as any).subtipo_tdah || 'F90_2' : undefined,
+      acepto_terminos: formAuth.acepto_terminos
     });
 
     if (res.ok) {
+      if (res.requiere_aprobacion) {
+        setModalCuentaPendiente({
+          abierto: true,
+          username: formAuth.username,
+          rol: formAuth.rol
+        });
+      }
       limpiarFormulario();
       setModalAuth('NONE');
     } else {
@@ -117,20 +166,72 @@ const MainApp: React.FC = () => {
         return 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40';
       case 'DIRECTOR':
         return 'bg-amber-500/20 text-amber-300 border border-amber-500/40';
+      case 'SUPERADMIN':
+        return 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40';
       default:
         return 'bg-slate-700 text-slate-300 border border-slate-600';
     }
   };
 
+  // Si el usuario está autenticado, cada portal tiene su propio App Shell con Sidebar lateral dedicado
+  if (usuario) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-100 font-sans">
+        {(tienePermiso('ACCESO_PANEL_SUPERADMIN') || usuario.rol === 'SUPERADMIN') ? (
+          <DashboardSuperadmin />
+        ) : (tienePermiso('ACCESO_PORTAL_ESTUDIANTE') || usuario.rol === 'ESTUDIANTE') ? (
+          <PortalEstudiante />
+        ) : (
+          <DashboardAutoridades />
+        )}
+
+        {/* Modal Notificación de Cuenta Suspendida / Desactivada en Tiempo Real */}
+        {alertaSuspension && (
+          <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-slate-900 border border-rose-500/30 max-w-md w-full p-6 rounded-3xl space-y-5 shadow-2xl">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center shrink-0">
+                  <AlertCircle className="w-6 h-6 text-rose-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Sesión Finalizada: Cuenta Suspendida</h3>
+                  <p className="text-xs text-rose-400">Acceso institucional revocado</p>
+                </div>
+              </div>
+
+              <div className="space-y-3 text-xs text-slate-300">
+                <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-200 leading-relaxed text-[11px] space-y-2">
+                  <p className="font-semibold text-rose-300">{alertaSuspension}</p>
+                  <p className="text-[10px] text-slate-400">
+                    Tu sesión activa ha sido cerrada inmediatamente por seguridad. Si consideras que se trata de un error o requieres rehabilitar tu acceso, comunícate con el Superadministrador de la institución.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button
+                  onClick={cerrarAlertaSuspension}
+                  className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-600/30 transition cursor-pointer"
+                >
+                  Entendido, ir al inicio
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
       
-      {/* Navbar Principal */}
+      {/* Navbar Público para Visitantes */}
       <header className="glass-panel border-b border-slate-800/80 sticky top-0 z-40 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
           
           {/* Logo Brand */}
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => { if (!usuario) cerrarModal(); }}>
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => cerrarModal()}>
             <img
               src="/Logo.jpg"
               alt="NEUROFOCUS AI Logo"
@@ -142,72 +243,31 @@ const MainApp: React.FC = () => {
             </div>
           </div>
 
-          {/* Botones Header / Estado Usuario */}
-          {usuario ? (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-3 bg-slate-900/80 border border-slate-800 px-4 py-2 rounded-xl text-xs">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                <span className="text-slate-300 font-medium">
-                  {usuario.rol === 'ESTUDIANTE' ? 'Estudiante:' : 'Sesión activa:'} <strong className="text-white">{usuario.username}</strong>
-                </span>
-                <span className={`px-2.5 py-0.5 rounded-full font-mono font-bold text-[10px] ${getBadgeRol(usuario.rol)}`}>
-                  {usuario.rol}
-                </span>
-                {usuario.codigo_estudiante && (
-                  <span className="px-2 py-0.5 rounded bg-slate-800 text-emerald-400 font-mono font-bold text-[10px] border border-slate-700">
-                    {usuario.codigo_estudiante}
-                  </span>
-                )}
-              </div>
-
-              <button
-                onClick={() => {
-                  limpiarFormulario();
-                  logout();
-                }}
-                className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-rose-400 rounded-xl border border-slate-800 transition text-xs font-semibold"
-                title="Cerrar Sesión de forma segura"
-              >
-                <LogOut className="w-4 h-4" />
-                <span>Cerrar Sesión</span>
-              </button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => abrirModal('LOGIN')}
-                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl border border-slate-700 transition flex items-center gap-2"
-              >
-                <LogIn className="w-4 h-4 text-emerald-400" /> Iniciar Sesión
-              </button>
-              <button
-                onClick={() => abrirModal('REGISTRO')}
-                className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center gap-2"
-              >
-                <UserPlus className="w-4 h-4" /> Registrarse
-              </button>
-            </div>
-          )}
+          {/* Botones Header / Estado Visitante */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => abrirModal('LOGIN')}
+              className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl border border-slate-700 transition flex items-center gap-2 cursor-pointer"
+            >
+              <LogIn className="w-4 h-4 text-emerald-400" /> Iniciar Sesión
+            </button>
+            <button
+              onClick={() => abrirModal('REGISTRO')}
+              className="px-5 py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs rounded-xl shadow-lg shadow-emerald-500/20 transition flex items-center gap-2 cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" /> Registrarse
+            </button>
+          </div>
 
         </div>
       </header>
 
-      {/* Área Principal de Contenido (Flujo Estricto de Seguridad RBAC) */}
+      {/* Área Principal de Contenido (Landing Page) */}
       <main className="flex-1">
-        {usuario ? (
-          // Redirección estricta según el Rol registrado en la Base de Datos
-          usuario.rol === 'ESTUDIANTE' ? (
-            <PortalEstudiante />
-          ) : (
-            <DashboardAutoridades />
-          )
-        ) : (
-          // Si no está autenticado, siempre ve la Landing Page por defecto
-          <LandingPage
-            onAbrirLogin={() => abrirModal('LOGIN')}
-            onAbrirRegistro={() => abrirModal('REGISTRO')}
-          />
-        )}
+        <LandingPage
+          onAbrirLogin={() => abrirModal('LOGIN')}
+          onAbrirRegistro={() => abrirModal('REGISTRO')}
+        />
       </main>
 
       {/* Modal de Autenticación (Login / Registro) */}
@@ -364,8 +424,19 @@ const MainApp: React.FC = () => {
                       <option value="PSICOLOGO"> Gabinete Psicopedagógico (Reportes PDF)</option>
                       <option value="DIRECTOR"> Director de Unidad Educativa</option>
                       <option value="TUTOR"> Tutor / Padre de Familia</option>
+                      <option value="SIN_ROL"> Sin Rol (Personal en Espera de Asignación)</option>
                     </select>
                   </div>
+
+                  {/* Advertencia institucional para roles que requieren validación */}
+                  {formAuth.rol !== 'ESTUDIANTE' && (
+                    <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300 text-[11px] flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-400" />
+                      <p className="leading-relaxed">
+                        <strong>Validación Requerida:</strong> Por políticas de privacidad y protección de datos (Ley 548), las cuentas con rol de <strong>{formAuth.rol === 'SIN_ROL' ? 'Sin Rol' : formAuth.rol}</strong> requieren validación del Superadministrador antes de poder iniciar sesión.
+                      </p>
+                    </div>
+                  )}
 
                   {/* Campos específicos cuando se registra como ESTUDIANTE */}
                   {formAuth.rol === 'ESTUDIANTE' && (
@@ -403,12 +474,9 @@ const MainApp: React.FC = () => {
                           onChange={(e) => setFormAuth({ ...formAuth, grado_escolar: e.target.value })}
                           className="w-full bg-slate-900 border border-emerald-500/30 text-emerald-300 font-semibold rounded-xl px-3 py-2 text-xs outline-none focus:border-emerald-400 transition"
                         >
-                          <option value="1º de Secundaria">1º de Secundaria</option>
-                          <option value="2º de Secundaria">2º de Secundaria</option>
-                          <option value="3º de Secundaria">3º de Secundaria</option>
-                          <option value="4º de Secundaria">4º de Secundaria</option>
-                          <option value="5º de Secundaria">5º de Secundaria</option>
-                          <option value="6º de Secundaria">6º de Secundaria</option>
+                          {cursosDisponibles.map((c) => (
+                            <option key={c} value={c}>{c}</option>
+                          ))}
                         </select>
                       </div>
                       <div>
@@ -444,10 +512,57 @@ const MainApp: React.FC = () => {
                     />
                   </div>
 
+                  {/* 🛡️ Consentimiento Informado y Términos Legales por Rol (Capítulo 5) */}
+                  <div className={`p-3.5 rounded-2xl border transition ${
+                    formAuth.acepto_terminos 
+                      ? 'bg-emerald-500/10 border-emerald-500/30' 
+                      : 'bg-slate-950/80 border-slate-800'
+                  }`}>
+                    <div className="flex items-start gap-2.5">
+                      <input
+                        type="checkbox"
+                        id="check_terminos_legales"
+                        checked={formAuth.acepto_terminos}
+                        onChange={(e) => setFormAuth({ ...formAuth, acepto_terminos: e.target.checked })}
+                        className="mt-1 w-4 h-4 rounded border-slate-700 text-cyan-500 focus:ring-cyan-500/30 cursor-pointer accent-cyan-400 shrink-0"
+                      />
+                      <label htmlFor="check_terminos_legales" className="text-xs text-slate-300 select-none leading-relaxed">
+                        He leído y acepto los{' '}
+                        <button
+                          type="button"
+                          onClick={() => setModalTerminosAbierto(true)}
+                          className="font-bold text-cyan-400 hover:text-cyan-300 underline inline cursor-pointer"
+                        >
+                          Términos y Condiciones
+                        </button>{' '}
+                        y la{' '}
+                        <button
+                          type="button"
+                          onClick={() => setModalTerminosAbierto(true)}
+                          className="font-bold text-emerald-400 hover:text-emerald-300 underline inline cursor-pointer"
+                        >
+                          Política de Privacidad Biométrica
+                        </button>{' '}
+                        correspondiente a mi rol de <span className="font-semibold text-white uppercase tracking-wider bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">{formAuth.rol}</span>.
+                      </label>
+                    </div>
+
+                    {!formAuth.acepto_terminos && (
+                      <p className="text-[11px] text-amber-400/90 flex items-center gap-1.5 pl-6 font-medium mt-1.5">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                        Es obligatorio aceptar los términos para crear tu cuenta.
+                      </p>
+                    )}
+                  </div>
+
                   <button
                     type="submit"
-                    disabled={cargando}
-                    className="w-full py-3 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-sm rounded-xl shadow-lg shadow-cyan-500/20 transition mt-2 disabled:opacity-50"
+                    disabled={!formAuth.acepto_terminos || cargando}
+                    className={`w-full py-3 font-bold text-sm rounded-xl shadow-lg transition mt-2 flex items-center justify-center gap-2 ${
+                      formAuth.acepto_terminos && !cargando
+                        ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-500/20 cursor-pointer'
+                        : 'bg-slate-800 text-slate-500 border border-slate-700/60 cursor-not-allowed opacity-60'
+                    }`}
                   >
                     {cargando ? 'Registrando...' : 'Crear Cuenta e Ingresar'}
                   </button>
@@ -467,6 +582,102 @@ const MainApp: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Modal Notificación de Cuenta en Revisión / Pendiente de Aprobación */}
+      {modalCuentaPendiente.abierto && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-slate-700 max-w-md w-full p-6 rounded-3xl space-y-5 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center shrink-0">
+                <Clock className="w-6 h-6 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Solicitud de Registro Enviada</h3>
+                <p className="text-xs text-slate-400">Validación Institucional en Proceso</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <div className="p-3.5 bg-slate-950 rounded-2xl border border-slate-800 space-y-1">
+                <p className="text-slate-400">Usuario registrado:</p>
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white font-mono text-sm">{modalCuentaPendiente.username}</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                    Rol: {modalCuentaPendiente.rol === 'SIN_ROL' ? 'Sin Rol Asignado' : modalCuentaPendiente.rol}
+                  </span>
+                </div>
+              </div>
+
+              <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-2xl text-amber-200 leading-relaxed text-[11px] space-y-1.5">
+                <p className="font-bold flex items-center gap-1.5 text-amber-300">
+                  <ShieldCheck className="w-4 h-4 text-amber-400 shrink-0" /> Control de Acceso y Protección de Datos (Ley 548)
+                </p>
+                <p>
+                  Tu cuenta ha sido creada exitosamente. Sin embargo, por normativas de seguridad y privacidad clínica, las cuentas con perfiles docentes o evaluadores <strong>deben ser aprobadas por el Superadministrador</strong> antes de poder iniciar sesión.
+                </p>
+                <p className="text-[10px] text-amber-300/80 pt-0.5">
+                  Una vez que la administración apruebe tu solicitud, podrás ingresar normalmente con tu usuario y contraseña.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setModalCuentaPendiente({ abierto: false, username: '', rol: '' })}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+              >
+                Entendido, esperar aprobación
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Notificación de Cuenta Suspendida / Desactivada en Tiempo Real */}
+      {alertaSuspension && (
+        <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-slate-900 border border-rose-500/30 max-w-md w-full p-6 rounded-3xl space-y-5 shadow-2xl">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-rose-500/10 border border-rose-500/20 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-6 h-6 text-rose-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">Sesión Finalizada: Cuenta Suspendida</h3>
+                <p className="text-xs text-rose-400">Acceso institucional revocado</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-300">
+              <div className="p-3.5 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-200 leading-relaxed text-[11px] space-y-2">
+                <p className="font-semibold text-rose-300">{alertaSuspension}</p>
+                <p className="text-[10px] text-slate-400">
+                  Tu sesión activa ha sido cerrada inmediatamente por seguridad. Si consideras que se trata de un error o requieres rehabilitar tu acceso, comunícate con el Superadministrador de la institución.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={cerrarAlertaSuspension}
+                className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-600/30 transition cursor-pointer"
+              >
+                Entendido, ir al inicio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Interactivo de Términos y Condiciones por Rol (Capítulo 5) */}
+      <ModalTerminosCondiciones
+        isOpen={modalTerminosAbierto}
+        onClose={() => setModalTerminosAbierto(false)}
+        onAceptar={() => {
+          setFormAuth(prev => ({ ...prev, acepto_terminos: true }));
+          setModalTerminosAbierto(false);
+        }}
+        rolSeleccionado={formAuth.rol}
+      />
 
     </div>
   );

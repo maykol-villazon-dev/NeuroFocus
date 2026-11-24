@@ -313,6 +313,10 @@ class ConnectionManager:
                 except Exception:
                     pass
 
+    async def broadcast_to_room(self, codigo_estudiante: str, message: dict):
+        """Difusión en tiempo real a todos los clientes (estudiante y panel docente) de la sala."""
+        await self.broadcast_to_student_room(codigo_estudiante, message)
+
     async def persistir_muestra_biometrica(
         self,
         codigo_estudiante: str,

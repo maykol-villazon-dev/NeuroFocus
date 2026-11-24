@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { apiCliente } from '../servicios_ws/api_cliente';
 
 export interface Usuario {
@@ -6,6 +6,7 @@ export interface Usuario {
   email?: string;
   rol: string;
   codigo_estudiante?: string;
+  permisos?: string[];
 }
 
 export interface RegistroData {
@@ -17,15 +18,19 @@ export interface RegistroData {
   codigo_estudiante?: string;
   grado_escolar?: string;
   subtipo_tdah?: string;
+  acepto_terminos?: boolean;
 }
 
 interface AuthContextType {
   usuario: Usuario | null;
   token: string | null;
   cargando: boolean;
+  alertaSuspension: string | null;
+  cerrarAlertaSuspension: () => void;
   login: (username: string, password: string) => Promise<{ ok: boolean; error?: string }>;
-  registro: (datos: RegistroData) => Promise<{ ok: boolean; error?: string }>;
+  registro: (datos: RegistroData) => Promise<{ ok: boolean; error?: string; requiere_aprobacion?: boolean; mensaje?: string }>;
   logout: () => void;
+  tienePermiso: (codigo: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -45,7 +50,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return localStorage.getItem('access_token');
   });
 
+  const usuarioRef = useRef<Usuario | null>(usuario);
+  usuarioRef.current = usuario;
+
   const [cargando, setCargando] = useState<boolean>(false);
+  const [alertaSuspension, setAlertaSuspension] = useState<string | null>(null);
+
+  const cerrarAlertaSuspension = () => {
+    setAlertaSuspension(null);
+  };
+
+  // Escuchar eventos en tiempo real disparados por el interceptor de Axios
+  useEffect(() => {
+    const handleCuentaSuspendida = (e: any) => {
+      logout();
+      setAlertaSuspension(
+        e.detail?.mensaje ||
+        'Su cuenta ha sido desactivada o suspendida por la administración institucional.'
+      );
+    };
+
+    window.addEventListener('sesion-cuenta-suspendida', handleCuentaSuspendida);
+    return () => {
+      window.removeEventListener('sesion-cuenta-suspendida', handleCuentaSuspendida);
+    };
+  }, []);
 
   // Verificación y sincronización en segundo plano con el backend al recargar la página
   useEffect(() => {
@@ -60,23 +89,102 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             username: res.data.username,
             rol: res.data.rol,
             codigo_estudiante: res.data.codigo_estudiante,
-            email: res.data.email
+            email: res.data.email,
+            permisos: res.data.permisos || []
           };
           setUsuario(userActual);
           localStorage.setItem('usuario_actual', JSON.stringify(userActual));
         }
       } catch (err: any) {
-        // Si el token expiró formalmente (401), limpiar sesión
-        if (err.response && err.response.status === 401) {
-          console.warn('[AUTH] Token JWT expirado o inválido. Cerrando sesión de forma segura...');
-          logout();
+        if (err.response) {
+          const status = err.response.status;
+          const detail = err.response.data?.detail || '';
+          if (status === 403 && typeof detail === 'string' && detail.includes('CUENTA_SUSPENDIDA')) {
+            logout();
+            setAlertaSuspension(
+              detail.replace('CUENTA_SUSPENDIDA:', '').trim() ||
+              'Su cuenta ha sido suspendida por la administración institucional.'
+            );
+          } else if (status === 401) {
+            console.warn('[AUTH] Token JWT expirado o inválido. Cerrando sesión de forma segura...');
+            logout();
+          }
         }
-        // Si fue falla de red temporal (offline), se mantiene el usuario de localStorage para no interrumpir
       }
     };
 
     verificarSesion();
   }, []);
+
+  // Monitor de Sesión Activa (Heartbeat de Seguridad y Sincronización en Vivo cada 4 segundos)
+  useEffect(() => {
+    if (!token || !usuario) return;
+
+    const intervalId = setInterval(async () => {
+      const currentToken = localStorage.getItem('access_token');
+      if (!currentToken) return;
+
+      try {
+        const res = await apiCliente.get('/auth/me');
+        if (res.data) {
+          const uActual = usuarioRef.current;
+          if (uActual) {
+            const nuevosPermisos: string[] = res.data.permisos || [];
+            const nuevoRol: string = res.data.rol || uActual.rol;
+            const nuevoCodigo: string | undefined = res.data.codigo_estudiante;
+
+            // Comparar si hubo cambios en permisos o rol asignado por el Superadmin
+            const permisosCambiaron = (
+              nuevosPermisos.length !== (uActual.permisos?.length || 0) ||
+              nuevosPermisos.some(p => !uActual.permisos?.includes(p)) ||
+              (uActual.permisos && uActual.permisos.some(p => !nuevosPermisos.includes(p)))
+            );
+
+            const rolCambio = nuevoRol !== uActual.rol;
+            const codigoCambio = nuevoCodigo !== uActual.codigo_estudiante;
+
+            if (permisosCambiaron || rolCambio || codigoCambio) {
+              console.log('[AUTH HEARTBEAT] Sincronización reactiva de permisos/rol en tiempo real:', {
+                usuario: uActual.username,
+                rolAnterior: uActual.rol,
+                nuevoRol,
+                permisosAnteriores: uActual.permisos?.length || 0,
+                nuevosPermisos: nuevosPermisos.length
+              });
+
+              const usuarioSincronizado: Usuario = {
+                ...uActual,
+                rol: nuevoRol,
+                codigo_estudiante: nuevoCodigo,
+                permisos: nuevosPermisos
+              };
+
+              setUsuario(usuarioSincronizado);
+              localStorage.setItem('usuario_actual', JSON.stringify(usuarioSincronizado));
+            }
+          }
+        }
+      } catch (err: any) {
+        if (err.response) {
+          const status = err.response.status;
+          const detail = err.response.data?.detail || '';
+          if (status === 403 && typeof detail === 'string' && detail.includes('CUENTA_SUSPENDIDA')) {
+            clearInterval(intervalId);
+            logout();
+            setAlertaSuspension(
+              detail.replace('CUENTA_SUSPENDIDA:', '').trim() ||
+              'Su cuenta ha sido desactivada o suspendida por la administración institucional.'
+            );
+          } else if (status === 401) {
+            clearInterval(intervalId);
+            logout();
+          }
+        }
+      }
+    }, 4000);
+
+    return () => clearInterval(intervalId);
+  }, [token, usuario?.username]);
 
   const login = async (usernameInput: string, passwordInput: string): Promise<{ ok: boolean; error?: string }> => {
     try {
@@ -89,8 +197,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headers: { 'Content-Type': 'multipart/form-data' }
       });
 
-      const { access_token, username, rol, codigo_estudiante } = res.data;
-      const nuevoUsuario: Usuario = { username, rol, codigo_estudiante };
+      const { access_token, username, rol, codigo_estudiante, permisos } = res.data;
+      const nuevoUsuario: Usuario = {
+        username,
+        rol,
+        codigo_estudiante,
+        permisos: permisos || []
+      };
 
       localStorage.setItem('access_token', access_token);
       localStorage.setItem('usuario_actual', JSON.stringify(nuevoUsuario));
@@ -131,7 +244,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const registro = async (datos: RegistroData): Promise<{ ok: boolean; error?: string }> => {
+  const registro = async (datos: RegistroData): Promise<{ ok: boolean; error?: string; requiere_aprobacion?: boolean; mensaje?: string }> => {
     try {
       setCargando(true);
       const payload = {
@@ -142,13 +255,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         nombre_completo: datos.nombre_completo.trim(),
         codigo_estudiante: datos.codigo_estudiante ? datos.codigo_estudiante.trim().toUpperCase() : undefined,
         grado_escolar: datos.grado_escolar ? datos.grado_escolar.trim() : undefined,
-        subtipo_tdah: datos.subtipo_tdah || 'F90_2'
+        subtipo_tdah: datos.subtipo_tdah || 'F90_2',
+        acepto_terminos: datos.acepto_terminos ?? false
       };
 
       const res = await apiCliente.post('/auth/registro', payload);
       console.log('[REGISTRO EXITOSO]', res.data);
 
-      // Tras crear el registro en la BD, autenticar automáticamente para obtener el token JWT
+      if (res.data?.requiere_aprobacion) {
+        setCargando(false);
+        return {
+          ok: true,
+          requiere_aprobacion: true,
+          mensaje: res.data.mensaje || 'Su cuenta fue registrada pero requiere aprobación del Superadministrador antes de iniciar sesión.'
+        };
+      }
+
+      // Si es estudiante (aprobación automática), autenticar para obtener el token JWT
       const loginRes = await login(datos.username.trim(), datos.password);
       setCargando(false);
       return loginRes;
@@ -185,8 +308,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUsuario(null);
   };
 
+  const tienePermiso = (codigo: string): boolean => {
+    if (!usuario) return false;
+    if (usuario.rol === 'SUPERADMIN') return true;
+    return Array.isArray(usuario.permisos) && usuario.permisos.includes(codigo);
+  };
+
   return (
-    <AuthContext.Provider value={{ usuario, token, cargando, login, registro, logout }}>
+    <AuthContext.Provider value={{ usuario, token, cargando, alertaSuspension, cerrarAlertaSuspension, login, registro, logout, tienePermiso }}>
       {children}
     </AuthContext.Provider>
   );

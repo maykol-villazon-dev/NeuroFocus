@@ -24,6 +24,8 @@ class RolUsuario(str, enum.Enum):
     DIRECTOR = "DIRECTOR"
     PSICOLOGO = "PSICOLOGO"
     SUPERADMIN = "SUPERADMIN"
+    ADMINISTRADOR = "ADMINISTRADOR"
+    SIN_ROL = "SIN_ROL"
 
 
 class SubtipoTDAH(str, enum.Enum):
@@ -84,6 +86,49 @@ class TipoEstimulo(str, enum.Enum):
 
 
 # ==========================================
+# MODELOS DE ROLES Y PERMISOS (RBAC GRANULAR)
+# ==========================================
+
+class RolPermiso(Base):
+    """Tabla Intermedia de Asociación M:N entre Roles y Permisos Granulares."""
+    __tablename__ = "roles_permisos"
+
+    id_rol = Column(String(36), ForeignKey("roles.id_rol", ondelete="CASCADE"), primary_key=True)
+    id_permiso = Column(String(36), ForeignKey("permisos.id_permiso", ondelete="CASCADE"), primary_key=True)
+    fecha_asignacion = Column(DateTime, default=ahora_bolivia)
+
+
+class Rol(Base):
+    """Catálogo de Roles Institucionales y de Sistema."""
+    __tablename__ = "roles"
+
+    id_rol = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    nombre_rol = Column(String(50), unique=True, nullable=False, index=True)
+    descripcion = Column(String(255), nullable=True)
+    es_sistema = Column(Boolean, default=False, nullable=False)
+    fecha_creacion = Column(DateTime, default=ahora_bolivia)
+
+    # Relationships
+    usuarios = relationship("Usuario", back_populates="rol_obj")
+    permisos = relationship("Permiso", secondary="roles_permisos", back_populates="roles", lazy="selectin")
+
+
+class Permiso(Base):
+    """Catálogo de Permisos y Capacidades Atómicas del Sistema."""
+    __tablename__ = "permisos"
+
+    id_permiso = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    codigo_permiso = Column(String(50), unique=True, nullable=False, index=True)
+    nombre_permiso = Column(String(100), nullable=False)
+    descripcion = Column(String(255), nullable=True)
+    modulo = Column(String(30), nullable=False)
+    fecha_creacion = Column(DateTime, default=ahora_bolivia)
+
+    # Relationships
+    roles = relationship("Rol", secondary="roles_permisos", back_populates="permisos", lazy="selectin")
+
+
+# ==========================================
 # ENTIDADES / TABLAS ORM (8 CLASES)
 # ==========================================
 
@@ -94,11 +139,102 @@ class Usuario(Base):
     username = Column(String(50), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     email = Column(String(100), unique=True, nullable=False, index=True)
-    rol = Column(SQLEnum(RolUsuario), nullable=False, default=RolUsuario.ESTUDIANTE)
+    rol = Column(String(50), nullable=False, default="ESTUDIANTE")
+    id_rol = Column(String(36), ForeignKey("roles.id_rol"), nullable=True)
+    verificado = Column(Boolean, default=False, nullable=False)
+    activo = Column(Boolean, default=True, nullable=False)
+    acepto_terminos = Column(Boolean, default=False, nullable=False)
+    fecha_aceptacion_terminos = Column(DateTime, nullable=True)
+    version_terminos = Column(String(20), default="1.0-2026", nullable=True)
     fecha_creacion = Column(DateTime, default=ahora_bolivia)
 
+    # Relationships
+    rol_obj = relationship("Rol", back_populates="usuarios", lazy="selectin")
+    estudiante = relationship("Estudiante", foreign_keys="[Estudiante.id_usuario]", back_populates="usuario", uselist=False)
+    consentimientos = relationship("AuditoriaConsentimiento", back_populates="usuario")
+    docente_cursos = relationship("DocenteCurso", back_populates="docente", cascade="all, delete-orphan")
+    materiales_subidos = relationship("MaterialEstudio", back_populates="docente", cascade="all, delete-orphan")
+
+
+class AuditoriaConsentimiento(Base):
+    """
+    Registro probatorio inmutable de Consentimiento Informado (Capítulo 5).
+    Garantiza trazabilidad legal según Ley 548 (Bolivia), Ley 164 y RGPD.
+    """
+    __tablename__ = "auditoria_consentimientos"
+
+    id_consentimiento = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id_usuario = Column(String(36), ForeignKey("usuarios.id_usuario"), nullable=False, index=True)
+    rol_usuario = Column(String(50), nullable=False)
+    codigo_estudiante_asociado = Column(String(20), nullable=True)
+    version_documento = Column(String(20), default="1.0-2026", nullable=False)
+    ip_registro = Column(String(45), nullable=True)
+    user_agent = Column(String(255), nullable=True)
+    fecha_hora = Column(DateTime, default=ahora_bolivia, nullable=False)
+
     # Relationship
-    estudiante = relationship("Estudiante", back_populates="usuario", uselist=False)
+    usuario = relationship("Usuario", back_populates="consentimientos")
+
+
+class Curso(Base):
+    """
+    Catálogo de Cursos y Niveles Académicos (Secundaria, Universidad, etc.)
+    Permite gestión dinámica por el Superadministrador eliminando valores fijos.
+    """
+    __tablename__ = "cursos"
+
+    id_curso = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    nombre_curso = Column(String(100), unique=True, nullable=False, index=True)
+    nivel_academico = Column(String(50), default="Secundaria", nullable=False)
+    descripcion = Column(String(200), nullable=True)
+    activo = Column(Boolean, default=True, nullable=False)
+    fecha_creacion = Column(DateTime, default=ahora_bolivia)
+
+    # Relationships
+    docentes_asignados = relationship("DocenteCurso", back_populates="curso", cascade="all, delete-orphan")
+    materiales = relationship("MaterialEstudio", back_populates="curso", cascade="all, delete-orphan")
+
+
+class DocenteCurso(Base):
+    """
+    Asignación de Docentes a Cursos (Muchos a Muchos).
+    Permite que un docente atienda uno o varios cursos académicos.
+    """
+    __tablename__ = "docente_cursos"
+
+    id_asignacion = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id_docente = Column(String(36), ForeignKey("usuarios.id_usuario"), nullable=False, index=True)
+    id_curso = Column(String(36), ForeignKey("cursos.id_curso"), nullable=False, index=True)
+    fecha_asignacion = Column(DateTime, default=ahora_bolivia)
+
+    # Relaciones
+    docente = relationship("Usuario", back_populates="docente_cursos")
+    curso = relationship("Curso", back_populates="docentes_asignados")
+
+
+class MaterialEstudio(Base):
+    """
+    Materiales pedagógicos y lecturas asignadas a cursos o de uso personal del estudiante.
+    Incluye descripción / indicaciones de tareas configurables por el docente.
+    """
+    __tablename__ = "materiales_estudio"
+
+    id_material = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    titulo = Column(String(150), nullable=False)
+    descripcion_tarea = Column(Text, nullable=True) # Instrucciones u objetivos asignados por el docente
+    id_curso = Column(String(36), ForeignKey("cursos.id_curso"), nullable=True, index=True) # None si es material personal del estudiante
+    id_docente = Column(String(36), ForeignKey("usuarios.id_usuario"), nullable=True, index=True) # Docente que lo publicó
+    codigo_estudiante_propietario = Column(String(20), nullable=True, index=True) # Si fue subido por el alumno
+    nombre_archivo_original = Column(String(200), nullable=False)
+    nombre_pdf = Column(String(200), nullable=False)
+    url_pdf = Column(String(255), nullable=False)
+    extension_original = Column(String(10), default="pdf", nullable=False)
+    tamano_kb = Column(Float, default=0.0)
+    fecha_subida = Column(DateTime, default=ahora_bolivia)
+
+    # Relaciones
+    curso = relationship("Curso", back_populates="materiales")
+    docente = relationship("Usuario", back_populates="materiales_subidos")
 
 
 class Estudiante(Base):
@@ -114,9 +250,11 @@ class Estudiante(Base):
     protegido = Column(Boolean, default=True, nullable=False) # Privacy by Design: True = Malla Facial 3D Anonimizada, False = Rostro Real
     fecha_registro = Column(DateTime, default=ahora_bolivia)
     id_usuario = Column(String(36), ForeignKey("usuarios.id_usuario"), nullable=True)
+    id_tutor = Column(String(36), ForeignKey("usuarios.id_usuario"), nullable=True)
 
     # Relationships
-    usuario = relationship("Usuario", back_populates="estudiante")
+    usuario = relationship("Usuario", foreign_keys=[id_usuario], back_populates="estudiante")
+    tutor = relationship("Usuario", foreign_keys=[id_tutor])
     sesiones = relationship("SesionMonitoreo", back_populates="estudiante", cascade="all, delete-orphan")
 
 
