@@ -658,16 +658,49 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
   // 4. Bucle de Procesamiento continuo de fotogramas
   useEffect(() => {
     let activo = true;
+    let fallbackSnapshotTimer: any = null;
 
     const procesarFrame = async () => {
       if (!activo) return;
 
-      if (camaraActiva && !modoSimulado && videoRef.current && faceMeshRef.current) {
-        if (videoRef.current.readyState >= 2) {
+      if (camaraActiva && !modoSimulado && videoRef.current) {
+        // Si FaceMesh ya está listo, procesar detección facial
+        if (faceMeshRef.current && videoRef.current.readyState >= 2) {
           try {
             await faceMeshRef.current.send({ image: videoRef.current });
           } catch (e) {
             // Manejo de excepciones de fotograma
+          }
+        } else if (!faceMeshRef.current && videoRef.current.readyState >= 2 && onFrameSnapshot) {
+          // Si FaceMesh aún está descargando WASM pero la cámara ya tiene video,
+          // enviar fotograma crudo cada 160ms para no dejar el monitor en negro
+          const ahora = performance.now();
+          if (ahora - ultimoSnapshotRef.current >= 160) {
+            ultimoSnapshotRef.current = ahora;
+            try {
+              if (!offscreenCanvasRef.current) {
+                offscreenCanvasRef.current = document.createElement('canvas');
+              }
+              const snap = offscreenCanvasRef.current;
+              const vw = videoRef.current.videoWidth || 640;
+              const vh = videoRef.current.videoHeight || 480;
+              const targetW = Math.min(840, vw);
+              const targetH = Math.round((vh / vw) * targetW) || 480;
+              if (snap.width !== targetW || snap.height !== targetH) {
+                snap.width = targetW;
+                snap.height = targetH;
+              }
+              const sCtx = snap.getContext('2d');
+              if (sCtx) {
+                sCtx.save();
+                sCtx.translate(targetW, 0);
+                sCtx.scale(-1, 1);
+                sCtx.drawImage(videoRef.current, 0, 0, targetW, targetH);
+                sCtx.restore();
+                const base64 = snap.toDataURL('image/jpeg', 0.82);
+                onFrameSnapshot(base64);
+              }
+            } catch (err) {}
           }
         }
       }
@@ -686,8 +719,9 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
       if (animFrameIdRef.current) {
         cancelAnimationFrame(animFrameIdRef.current);
       }
+      if (fallbackSnapshotTimer) clearInterval(fallbackSnapshotTimer);
     };
-  }, [camaraActiva, modoSimulado]);
+  }, [camaraActiva, modoSimulado, onFrameSnapshot]);
 
   // Vinculación reactiva del stream al elemento HTML5 <video>
   useEffect(() => {

@@ -617,7 +617,7 @@ export const PortalEstudiante: React.FC = () => {
         <div className="p-4 md:p-8 space-y-6 max-w-7xl mx-auto w-full flex-1">
 
         {/* VISTA 1: DASHBOARD (CÁMARA, CALIBRACIÓN Y MÉTRICAS) */}
-        <div className={seccionActiva === 'DASHBOARD' ? 'space-y-8 animate-in fade-in duration-200' : 'fixed -top-[9999px] -left-[9999px] opacity-0 pointer-events-none w-[640px] h-[480px] overflow-hidden'}>
+        <div style={{ display: seccionActiva === 'DASHBOARD' ? 'block' : 'none' }} className="space-y-8 animate-in fade-in duration-200">
         
         {/* Banner de Bienvenida y Perfil */}
         <div className="glass-panel rounded-3xl p-8 border border-slate-800 relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-6">
