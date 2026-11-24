@@ -14,6 +14,14 @@ if not SQL_PATH.exists():
     print(f"ERROR: No se encuentra {SQL_PATH}")
     exit(1)
 
+# Si la base de datos existe, la removemos para que el dump cree todas las tablas limpias
+if DB_PATH.exists():
+    try:
+        os.remove(DB_PATH)
+        print(f"Base de datos anterior eliminada para restauracion limpia: {DB_PATH}")
+    except Exception as e:
+        print(f"Aviso al remover BD: {e}")
+
 con = sqlite3.connect(DB_PATH)
 cur = con.cursor()
 
@@ -24,21 +32,7 @@ cur.execute("PRAGMA foreign_keys = OFF;")
 with open(SQL_PATH, "r", encoding="utf-8") as f:
     sql_script = f.read()
 
-# 3. Limpiar tablas existentes
-tablas = [
-    'eventos_desatencion', 'metricas_atencionales', 'reportes_psicopedagogicos', 
-    'sesiones_monitoreo', 'estudiantes', 'usuarios', 'cursos', 'materiales_estudio',
-    'docente_cursos', 'roles_permisos', 'permisos', 'roles', 'auditoria_consentimientos',
-    'parametros_calibracion'
-]
-
-for t in tablas:
-    try:
-        cur.execute(f"DELETE FROM {t};")
-    except Exception:
-        pass
-
-# 4. Ejecutar el dump
+# 3. Ejecutar el dump
 cur.executescript(sql_script)
 
 # 5. Asegurar que TODOS los usuarios (incluido superadmin) estén activos y verificados
