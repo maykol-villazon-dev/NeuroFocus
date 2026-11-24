@@ -1,7 +1,7 @@
 import cv2
 import math
 import numpy as np
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from collections import deque
 
 

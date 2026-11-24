@@ -11,9 +11,10 @@ import math
 
 from app.persistencia.config_db import get_db
 from app.persistencia.modelos_orm import (
-    SesionMonitoreo, ParametrosCalibracion, Estudiante, EstadoSesion, SubtipoTDAH,
+    Usuario, SesionMonitoreo, ParametrosCalibracion, Estudiante, EstadoSesion, SubtipoTDAH,
     MetricaAtencional, EventoDesatencion, ahora_bolivia
 )
+from app.autenticacion_rbac.rutas_auth import get_usuario_actual, obtener_permisos_usuario
 
 router = APIRouter(prefix="/monitoreo", tags=["Monitoreo & Calibración (HU-03)"])
 
@@ -98,13 +99,30 @@ async def registrar_calibracion(
 
 
 @router.get("/estudiantes")
-async def listar_estudiantes(db: AsyncSession = Depends(get_db)):
-    """Retorna la lista de todos los estudiantes registrados en la base de datos."""
+async def listar_estudiantes(
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_usuario_actual)
+):
+    """Retorna la lista de estudiantes filtrada estrictamente por los permisos RBAC del usuario solicitante."""
+    permisos = await obtener_permisos_usuario(usuario_actual, db)
+    rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+
     query = (
         select(Estudiante)
         .options(selectinload(Estudiante.sesiones))
         .order_by(Estudiante.fecha_registro.desc())
     )
+
+    if rol_str == "SUPERADMIN" or "VER_TODOS_ESTUDIANTES" in permisos:
+        # Autorizado para supervisar a todos los estudiantes de la institución
+        pass
+    elif "VER_ESTUDIANTES_ASIGNADOS" in permisos:
+        # Restricción tutelar / docente: solo alumnos formalmente vinculados
+        query = query.where(Estudiante.id_tutor == usuario_actual.id_usuario)
+    else:
+        # Rol sin privilegios de visualización de estudiantes
+        return []
+
     result = await db.execute(query)
     estudiantes = result.scalars().all()
     
@@ -161,7 +179,8 @@ async def listar_estudiantes(db: AsyncSession = Depends(get_db)):
 @router.get("/estudiantes/{codigo_estudiante}")
 async def obtener_estudiante_por_codigo(
     codigo_estudiante: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_usuario_actual)
 ):
     """Retorna los datos específicos de un estudiante por su código institucional."""
     cod_key = codigo_estudiante.strip().upper()
@@ -174,6 +193,16 @@ async def obtener_estudiante_por_codigo(
     est = result.scalars().first()
     if not est:
         raise HTTPException(status_code=404, detail="Estudiante no encontrado.")
+
+    # Control de acceso: Si no puede ver todos, verificar si es su tutorado
+    permisos = await obtener_permisos_usuario(usuario_actual, db)
+    rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+    if rol_str != "SUPERADMIN" and "VER_TODOS_ESTUDIANTES" not in permisos:
+        if "VER_ESTUDIANTES_ASIGNADOS" in permisos:
+            if est.id_tutor != usuario_actual.id_usuario:
+                raise HTTPException(status_code=403, detail="Acceso denegado: No tiene autorización para consultar los datos de este estudiante.")
+        else:
+            raise HTTPException(status_code=403, detail="Acceso denegado: No cuenta con permisos para ver estudiantes.")
 
     # Verificar si está realmente en línea en WebSockets
     esta_en_linea = False
@@ -226,9 +255,15 @@ class PrivacidadEstudianteSchema(BaseModel):
 async def actualizar_privacidad_estudiante(
     codigo_estudiante: str,
     datos: PrivacidadEstudianteSchema,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_usuario_actual)
 ):
     """Actualiza la política de anonimización facial del estudiante (True = Malla 3D, False = Rostro Real)."""
+    permisos = await obtener_permisos_usuario(usuario_actual, db)
+    rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+    if rol_str != "SUPERADMIN" and "GESTIONAR_PRIVACIDAD_ESTUDIANTE" not in permisos:
+        raise HTTPException(status_code=403, detail="Acceso denegado: No posee el permiso GESTIONAR_PRIVACIDAD_ESTUDIANTE para alternar la máscara 3D.")
+
     cod_key = codigo_estudiante.strip().upper()
     st_res = await db.execute(select(Estudiante).where(Estudiante.codigo_estudiante == cod_key))
     student = st_res.scalars().first()
@@ -269,9 +304,19 @@ class ActualizarEstudianteSchema(BaseModel):
 async def actualizar_estudiante(
     codigo_estudiante: str,
     datos: ActualizarEstudianteSchema,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_usuario_actual)
 ):
     """Permite actualizar el diagnóstico, subtipo, grado o notas clínicas de un estudiante."""
+    permisos = await obtener_permisos_usuario(usuario_actual, db)
+    rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+
+    if datos.subtipo_tdah is not None and rol_str != "SUPERADMIN" and "EDITAR_CLASIFICACION_CLINICA" not in permisos:
+        raise HTTPException(status_code=403, detail="Acceso denegado: La asignación o modificación de la clasificación DSM-5-TR es exclusiva del Gabinete Psicopedagógico.")
+
+    if rol_str != "SUPERADMIN" and "EDITAR_PERFIL_ESTUDIANTE" not in permisos and "EDITAR_CLASIFICACION_CLINICA" not in permisos:
+        raise HTTPException(status_code=403, detail="Acceso denegado: No posee permisos para modificar la ficha del estudiante.")
+
     query = select(Estudiante).where(Estudiante.codigo_estudiante == codigo_estudiante.strip().upper())
     result = await db.execute(query)
     est = result.scalars().first()
@@ -375,7 +420,8 @@ async def finalizar_sesion_monitoreo(
 @router.get("/estudiantes/{codigo_estudiante}/sesiones")
 async def listar_sesiones_estudiante(
     codigo_estudiante: str,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_usuario_actual)
 ):
     """
     Retorna la bitácora histórica completa de sesiones de un estudiante específico (HU-11 / Tesis Longitudinal).
@@ -392,6 +438,16 @@ async def listar_sesiones_estudiante(
     est = st_res.scalars().first()
     if not est:
         raise HTTPException(status_code=404, detail="Estudiante no encontrado.")
+
+    # Control de acceso por estudiante
+    permisos = await obtener_permisos_usuario(usuario_actual, db)
+    rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+    if rol_str != "SUPERADMIN" and "VER_TODOS_ESTUDIANTES" not in permisos:
+        if "VER_ESTUDIANTES_ASIGNADOS" in permisos:
+            if est.id_tutor != usuario_actual.id_usuario:
+                raise HTTPException(status_code=403, detail="Acceso denegado: No tiene autorización para consultar las sesiones de este estudiante.")
+        else:
+            raise HTTPException(status_code=403, detail="Acceso denegado: No cuenta con permisos para ver estudiantes.")
 
     # Filtrar sesiones con datos reales (al menos 2 métricas o duración >= 10s con IAI)
     sesiones_validas = [

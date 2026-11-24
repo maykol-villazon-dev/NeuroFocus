@@ -11,9 +11,10 @@ from sqlalchemy.orm import selectinload
 
 from app.persistencia.config_db import get_db
 from app.persistencia.modelos_orm import (
-    Estudiante, SesionMonitoreo, MetricaAtencional, EventoDesatencion,
+    Usuario, Estudiante, SesionMonitoreo, MetricaAtencional, EventoDesatencion,
     ReportePsicopedagogico, SubtipoTDAH
 )
+from app.autenticacion_rbac.rutas_auth import get_usuario_actual, obtener_permisos_usuario
 from app.servicios.generador_reportes import generar_pdf_reporte_psicopedagogico
 
 router = APIRouter(prefix="/reportes", tags=["Reportes Psicopedagógicos PDF (REQ-21, REQ-36)"])
@@ -186,7 +187,8 @@ async def compilar_pdf_reporte(sesion: Optional[SesionMonitoreo], estudiante: Es
 async def descargar_reporte_pdf_por_sesion(
     id_sesion: str,
     resumido: bool = Query(False, description="True para reporte resumido con Top 8 evidencias críticas"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_usuario_actual)
 ):
     """
     Genera y descarga el Reporte Psicopedagógico formal en formato PDF correspondiente a una sesión específica
@@ -205,6 +207,21 @@ async def descargar_reporte_pdf_por_sesion(
     if not sesion or not sesion.estudiante:
         raise HTTPException(status_code=404, detail=f"Sesión con ID {id_sesion} no encontrada en la base de datos.")
 
+    # Control de Permisos RBAC
+    permisos = await obtener_permisos_usuario(usuario_actual, db)
+    rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+
+    if resumido:
+        if rol_str != "SUPERADMIN" and "DESCARGAR_REPORTE_RESUMEN" not in permisos:
+            raise HTTPException(status_code=403, detail="Acceso denegado: No posee el permiso DESCARGAR_REPORTE_RESUMEN para descargar reportes ejecutivos.")
+    else:
+        if rol_str != "SUPERADMIN" and "DESCARGAR_REPORTE_COMPLETO" not in permisos:
+            raise HTTPException(status_code=403, detail="Acceso denegado: No posee el permiso DESCARGAR_REPORTE_COMPLETO para descargar el informe clínico integral.")
+
+    if rol_str != "SUPERADMIN" and "VER_TODOS_ESTUDIANTES" not in permisos and "VER_ESTUDIANTES_ASIGNADOS" in permisos:
+        if sesion.estudiante.id_tutor != usuario_actual.id_usuario:
+            raise HTTPException(status_code=403, detail="Acceso denegado: Solo puede descargar reportes de sus estudiantes asignados.")
+
     return await compilar_pdf_reporte(sesion, sesion.estudiante, db, resumido=resumido)
 
 
@@ -213,7 +230,8 @@ async def descargar_reporte_pdf(
     codigo_estudiante: str,
     id_sesion: Optional[str] = Query(None, description="ID opcional de sesión específica para descargar su reporte individual"),
     resumido: bool = Query(False, description="True para reporte resumido con Top 8 evidencias críticas"),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_usuario_actual)
 ):
     """
     Genera y descarga en tiempo real el Reporte Psicopedagógico formal en formato PDF (REQ-21 y REQ-36).
@@ -227,7 +245,22 @@ async def descargar_reporte_pdf(
     if not estudiante:
         raise HTTPException(status_code=404, detail=f"Estudiante con código {codigo_estudiante} no encontrado en la base de datos.")
 
-    if id_sesion:
+    # Control de Permisos RBAC
+    permisos = await obtener_permisos_usuario(usuario_actual, db)
+    rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+
+    if resumido:
+        if rol_str != "SUPERADMIN" and "DESCARGAR_REPORTE_RESUMEN" not in permisos:
+            raise HTTPException(status_code=403, detail="Acceso denegado: No posee el permiso DESCARGAR_REPORTE_RESUMEN para descargar reportes ejecutivos.")
+    else:
+        if rol_str != "SUPERADMIN" and "DESCARGAR_REPORTE_COMPLETO" not in permisos:
+            raise HTTPException(status_code=403, detail="Acceso denegado: No posee el permiso DESCARGAR_REPORTE_COMPLETO para descargar el informe clínico integral.")
+
+    if rol_str != "SUPERADMIN" and "VER_TODOS_ESTUDIANTES" not in permisos and "VER_ESTUDIANTES_ASIGNADOS" in permisos:
+        if estudiante.id_tutor != usuario_actual.id_usuario:
+            raise HTTPException(status_code=403, detail="Acceso denegado: Solo puede descargar reportes de sus estudiantes asignados.")
+
+    if id_sesion and isinstance(id_sesion, str):
         ses_res = await db.execute(
             select(SesionMonitoreo)
             .options(
@@ -256,15 +289,34 @@ async def descargar_reporte_pdf(
 
 
 @router.get("/historial")
-async def listar_historial_reportes(db: AsyncSession = Depends(get_db)):
+async def listar_historial_reportes(
+    db: AsyncSession = Depends(get_db),
+    usuario_actual: Usuario = Depends(get_usuario_actual)
+):
     """Retorna el historial completo de reportes y sesiones de estudiantes para descarga."""
+    permisos = await obtener_permisos_usuario(usuario_actual, db)
+    rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+
+    if rol_str != "SUPERADMIN" and "VER_HISTORIAL_REPORTES" not in permisos:
+        raise HTTPException(
+            status_code=403,
+            detail="Acceso denegado: No cuenta con autorización para auditar el historial de reportes emitidos."
+        )
+
     query = (
         select(Estudiante)
         .options(
             selectinload(Estudiante.sesiones).selectinload(SesionMonitoreo.reporte)
         )
-        .order_by(Estudiante.fecha_registro.desc())
     )
+
+    if rol_str != "SUPERADMIN" and "VER_TODOS_ESTUDIANTES" not in permisos:
+        if "VER_ESTUDIANTES_ASIGNADOS" in permisos:
+            query = query.where(Estudiante.id_tutor == usuario_actual.id_usuario)
+        else:
+            return []
+
+    query = query.order_by(Estudiante.fecha_registro.desc())
     res = await db.execute(query)
     estudiantes = res.scalars().all()
     

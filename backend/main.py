@@ -9,6 +9,7 @@ from app.servicios.rutas_monitoreo import router as monitoreo_router
 from app.servicios.rutas_websockets import router as ws_router
 from app.servicios.rutas_reportes import router as reportes_router
 from app.servicios.rutas_materiales import router as materiales_router
+from app.servicios.rutas_superadmin import router as superadmin_router
 
 
 @asynccontextmanager
@@ -43,6 +44,7 @@ app.include_router(auth_router, prefix=settings.API_V1_STR)
 app.include_router(monitoreo_router, prefix=settings.API_V1_STR)
 app.include_router(reportes_router, prefix=settings.API_V1_STR)
 app.include_router(materiales_router, prefix=settings.API_V1_STR)
+app.include_router(superadmin_router, prefix=settings.API_V1_STR)
 app.include_router(ws_router)
 
 
