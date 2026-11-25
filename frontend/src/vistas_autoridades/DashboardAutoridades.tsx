@@ -1082,7 +1082,7 @@ export const DashboardAutoridades: React.FC = () => {
                 >
                   {estudiantes.map((est) => (
                     <option key={est.codigo_estudiante} value={est.codigo_estudiante}>
-                      {est.codigo_estudiante} - {est.nombre_completo}
+                      {est.sesion_activa ? '🟢 ' : ''}{est.codigo_estudiante} - {est.nombre_completo}
                     </option>
                   ))}
                 </select>
@@ -1536,13 +1536,21 @@ export const DashboardAutoridades: React.FC = () => {
                         </div>
                       ) : (
                         <div className="flex flex-col items-center justify-center p-6 text-center space-y-3">
-                          <div className="w-14 h-14 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 shadow-inner">
-                            <Camera className="w-7 h-7 text-slate-500" />
+                          <div className={`w-14 h-14 rounded-2xl bg-slate-900 border flex items-center justify-center shadow-inner ${wsConectado ? 'border-cyan-500/40 text-cyan-400' : 'border-slate-800 text-slate-500'}`}>
+                            {wsConectado ? (
+                              <RefreshCw className="w-7 h-7 text-cyan-400 animate-spin" />
+                            ) : (
+                              <Camera className="w-7 h-7 text-slate-500" />
+                            )}
                           </div>
                           <div className="space-y-1">
-                            <p className="text-sm font-semibold text-slate-300">Cámara del Estudiante en Espera</p>
-                            <p className="text-xs text-slate-500 max-w-xs leading-relaxed">
-                              Al encender la cámara en clase, la transmisión en vivo con la malla geométrica (ojos, nariz SolvePnP y hombros) se proyectará en esta ventana.
+                            <p className="text-sm font-semibold text-slate-200">
+                              {wsConectado ? `Conectado al canal ${codigoBusqueda}` : 'Conectando túnel seguro...'}
+                            </p>
+                            <p className="text-xs text-slate-400 max-w-xs leading-relaxed">
+                              {wsConectado
+                                ? 'Enlace activo. Tan pronto el estudiante encienda su cámara en su dispositivo, el streaming en vivo se proyectará automáticamente aquí.'
+                                : 'Estableciendo comunicación WSS con el servidor en la nube...'}
                             </p>
                           </div>
                         </div>

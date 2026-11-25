@@ -236,6 +236,7 @@ class ConnectionManager:
             self.active_connections[cod] = set()
             self.motores_fusion[cod] = MotorFusionAtencional()
         self.active_connections[cod].add(websocket)
+        print(f"[WS CONNECT] Cliente conectado a sala '{cod}'. Total clientes en sala: {len(self.active_connections[cod])}")
 
     async def asegurar_sesion_activa(self, codigo_estudiante: str):
         """Inicializa formalmente la sesión en BD únicamente cuando el estudiante envía telemetría real con cámara."""
@@ -278,6 +279,8 @@ class ConnectionManager:
         cod = codigo_estudiante.strip().upper()
         if cod in self.active_connections:
             self.active_connections[cod].discard(websocket)
+            total_restantes = len(self.active_connections[cod])
+            print(f"[WS DISCONNECT] Cliente desconectado de sala '{cod}'. Clientes restantes: {total_restantes}")
             if not self.active_connections[cod]:
                 del self.active_connections[cod]
                 if cod in self.motores_fusion:
@@ -570,6 +573,12 @@ async def websocket_monitoreo_estudiante(websocket: WebSocket, codigo_estudiante
             # Retransmisión de fotograma de cámara con malla facial si está presente
             if payload.get("frame"):
                 telemetry_packet["frame"] = payload.get("frame")
+
+            # Diagnóstico periódico de telemetría y video en sala
+            cnt = getattr(websocket, "_contador_paquetes", 0) + 1
+            setattr(websocket, "_contador_paquetes", cnt)
+            if cnt == 1 or cnt % 50 == 0:
+                print(f"[WS STREAM] Sala '{cod}' | Pkt #{cnt} | Cam: {bool(payload.get('frame'))} | IAI: {res['iai_filtrado']}% | Clientes en sala: {len(manager.active_connections.get(cod, []))}")
 
             # Retransmisión bidireccional instantánea
             await manager.broadcast_to_student_room(cod, telemetry_packet)
