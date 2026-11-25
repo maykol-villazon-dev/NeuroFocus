@@ -9,6 +9,7 @@ services:
       - ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=43200
       - ENVIRONMENT=production
+      - DATABASE_URL=sqlite+aiosqlite:////app_db/monitoreo_tdah.db
     volumes:
       - ./backend/almacen_capturas:/app/almacen_capturas
       - ./backend/almacen_materiales:/app/almacen_materiales
