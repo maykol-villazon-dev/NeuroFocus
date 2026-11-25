@@ -306,13 +306,24 @@ class ConnectionManager:
                     except Exception as err:
                         print(f"[WS DISCONNECT CONSOLIDAR ERROR] {err}")
 
-    async def broadcast_to_student_room(self, codigo_estudiante: str, message: dict):
+    async def broadcast_to_student_room(self, codigo_estudiante: str, message: dict, sender_socket: Optional[WebSocket] = None):
         cod = codigo_estudiante.strip().upper()
         if cod in self.active_connections:
-            data = json.dumps(message)
+            # Optimización de ancho de banda: No devolver el fotograma pesado de video al alumno que lo envió (anti-echo)
+            tiene_frame = bool(message.get("frame"))
+            data_completa = json.dumps(message)
+            data_ligera = None
+            if tiene_frame and sender_socket:
+                msg_ligero = {k: v for k, v in message.items() if k != "frame"}
+                data_ligera = json.dumps(msg_ligero)
+
             for connection in list(self.active_connections[cod]):
                 try:
-                    await connection.send_text(data)
+                    if connection == sender_socket:
+                        if data_ligera:
+                            await connection.send_text(data_ligera)
+                    else:
+                        await connection.send_text(data_completa)
                 except Exception:
                     pass
 
@@ -580,8 +591,8 @@ async def websocket_monitoreo_estudiante(websocket: WebSocket, codigo_estudiante
             if cnt == 1 or cnt % 50 == 0:
                 print(f"[WS STREAM] Sala '{cod}' | Pkt #{cnt} | Cam: {bool(payload.get('frame'))} | IAI: {res['iai_filtrado']}% | Clientes en sala: {len(manager.active_connections.get(cod, []))}")
 
-            # Retransmisión bidireccional instantánea
-            await manager.broadcast_to_student_room(cod, telemetry_packet)
+            # Retransmisión bidireccional instantánea (con optimización anti-echo de video para el estudiante)
+            await manager.broadcast_to_student_room(cod, telemetry_packet, sender_socket=websocket)
 
     except WebSocketDisconnect:
         await manager.disconnect(websocket, cod)

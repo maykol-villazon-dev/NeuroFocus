@@ -253,9 +253,13 @@ export const PortalEstudiante: React.FC = () => {
       console.warn('WebSocket init exception:', e);
     }
 
-    // Enviar paquete biométrico por el socket cada 160ms (~6 FPS fluidos y nítidos)
+    // Enviar paquete biométrico por el socket cada 180ms (~5.5 FPS fluidos y ultraligeros)
     const intervalWS = setInterval(() => {
       if (socket && socket.readyState === WebSocket.OPEN) {
+        // Control de Backpressure: Si la red del estudiante aún tiene > 32 KB en cola de salida,
+        // no acumular frames viejos (descartar para garantizar latencia cero en tiempo real)
+        const puedeEnviarFrame = socket.bufferedAmount < 32 * 1024;
+
         socket.send(JSON.stringify({
           codigo_estudiante: codigoEst,
           ear: telemetriaRef.current.ear,
@@ -272,13 +276,13 @@ export const PortalEstudiante: React.FC = () => {
           es_slumping: telemetriaRef.current.es_slumping,
           es_somnolencia: telemetriaRef.current.es_somnolencia,
           es_microsueno: telemetriaRef.current.es_somnolencia,
-          frame: frameSnapshotRef.current || undefined,
-          frame_pantalla: seccionActiva === 'MODO_ESTUDIO' ? (snapshotPantallaRef.current || undefined) : undefined,
+          frame: puedeEnviarFrame ? (frameSnapshotRef.current || undefined) : undefined,
+          frame_pantalla: (puedeEnviarFrame && seccionActiva === 'MODO_ESTUDIO') ? (snapshotPantallaRef.current || undefined) : undefined,
           material_estudio: materialEstudioActivoRef.current || undefined,
           timestamp: new Date().toISOString()
         }));
       }
-    }, 160);
+    }, 180);
 
     return () => {
       clearInterval(intervalWS);

@@ -689,106 +689,140 @@ export const DashboardAutoridades: React.FC = () => {
     }).join(' ');
   };
 
-  // Conexión WebSockets en Tiempo Real al Canal del Estudiante Seleccionado (HU-10)
+  // Conexión WebSockets en Tiempo Real al Canal del Estudiante Seleccionado (HU-10) con Auto-Reconexión Resiliente
   useEffect(() => {
     if (!tienePermiso('MONITOREAR_TIEMPO_REAL')) return;
     if (!estudianteEncontrado || !codigoBusqueda) return;
 
-    const codigoEst = codigoBusqueda.trim().toUpperCase();
-    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${wsProto}//${window.location.host}/ws/monitoreo/${codigoEst}`;
+    let activo = true;
     let socket: WebSocket | null = null;
     let pingInterval: any = null;
     let silenceTimer: any = null;
+    let reconnectTimeout: any = null;
 
-    try {
-      socket = new WebSocket(wsUrl);
+    const codigoEst = codigoBusqueda.trim().toUpperCase();
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${wsProto}//${window.location.host}/ws/monitoreo/${codigoEst}`;
 
-      socket.onopen = () => {
-        console.log('[DASHBOARD WS OPEN] Suscrito a la telemetría en vivo del estudiante:', codigoEst);
-        setWsConectado(true);
+    const conectarWebSocket = () => {
+      if (!activo) return;
 
-        pingInterval = setInterval(() => {
-          if (socket && socket.readyState === WebSocket.OPEN) {
-            socket.send(JSON.stringify({ ping: true, codigo_estudiante: codigoEst }));
+      try {
+        socket = new WebSocket(wsUrl);
+
+        socket.onopen = () => {
+          if (!activo) {
+            socket?.close();
+            return;
           }
-        }, 8000);
-      };
+          console.log('[DASHBOARD WS OPEN] Suscrito a la telemetría en vivo del estudiante:', codigoEst);
+          setWsConectado(true);
 
-      socket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.pong) return;
+          if (pingInterval) clearInterval(pingInterval);
+          pingInterval = setInterval(() => {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ ping: true, codigo_estudiante: codigoEst }));
+            }
+          }, 8000);
+        };
 
-          // Fotograma de video en tiempo real con malla facial MediaPipe
-          if (data.frame) {
-            setFrameStream(data.frame);
-          }
+        socket.onmessage = (event) => {
+          if (!activo) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.pong) return;
 
-          if (data.iai !== undefined) {
-            setRecibiendoTelemetria(true);
-            const iaiValor = Number(data.iai.toFixed(1));
-            let estado = 'Atención Alta';
-            if (data.es_abandono_puesto) {
-              estado = 'Ausente del Puesto';
-            } else if (iaiValor < 50) {
-              estado = 'Desatención Crítica';
-            } else if (iaiValor < 70) {
-              estado = 'Atención Moderada';
+            // Fotograma de video en tiempo real con malla facial MediaPipe
+            if (data.frame) {
+              setFrameStream(data.frame);
             }
 
-            setMetricasActuales({
-              iai: iaiValor,
-              scoreOcular: data.score_ocular !== undefined ? Number(data.score_ocular.toFixed(1)) : 0,
-              scorePostural: data.score_postural !== undefined ? Number(data.score_postural.toFixed(1)) : 0,
-              scoreMotriz: data.score_motriz !== undefined ? Number(data.score_motriz.toFixed(1)) : 0,
-              alertaActiva: data.alerta_reenganche || iaiValor < 50 || data.es_abandono_puesto || data.es_bostezo || data.distractor_externo || data.es_staring || data.es_slumping || data.es_microsueno || data.es_somnolencia,
-              estadoLectura: estado,
-              esAbandonoPuesto: !!data.es_abandono_puesto,
-              mar: data.mar !== undefined ? Number(data.mar.toFixed(2)) : 0.25,
-              esBostezo: !!data.es_bostezo,
-              distractorExterno: !!data.distractor_externo,
-              esStaring: !!data.es_staring,
-              esSlumping: !!data.es_slumping,
-              esSomnolencia: !!data.es_microsueno || !!data.es_somnolencia
-            });
+            if (data.iai !== undefined) {
+              setRecibiendoTelemetria(true);
+              const iaiValor = Number(data.iai.toFixed(1));
+              let estado = 'Atención Alta';
+              if (data.es_abandono_puesto) {
+                estado = 'Ausente del Puesto';
+              } else if (iaiValor < 50) {
+                estado = 'Desatención Crítica';
+              } else if (iaiValor < 70) {
+                estado = 'Atención Moderada';
+              }
 
-            setHistorialIai(prev => [...prev.slice(-24), iaiValor]);
-            setUltimoTimestamp(new Date().toLocaleTimeString());
+              setMetricasActuales({
+                iai: iaiValor,
+                scoreOcular: data.score_ocular !== undefined ? Number(data.score_ocular.toFixed(1)) : 0,
+                scorePostural: data.score_postural !== undefined ? Number(data.score_postural.toFixed(1)) : 0,
+                scoreMotriz: data.score_motriz !== undefined ? Number(data.score_motriz.toFixed(1)) : 0,
+                alertaActiva: data.alerta_reenganche || iaiValor < 50 || data.es_abandono_puesto || data.es_bostezo || data.distractor_externo || data.es_staring || data.es_slumping || data.es_microsueno || data.es_somnolencia,
+                estadoLectura: estado,
+                esAbandonoPuesto: !!data.es_abandono_puesto,
+                mar: data.mar !== undefined ? Number(data.mar.toFixed(2)) : 0.25,
+                esBostezo: !!data.es_bostezo,
+                distractorExterno: !!data.distractor_externo,
+                esStaring: !!data.es_staring,
+                esSlumping: !!data.es_slumping,
+                esSomnolencia: !!data.es_microsueno || !!data.es_somnolencia
+              });
 
-            // Si no llegan fotogramas en 3.5 segundos, la cámara se considera inactiva
-            if (silenceTimer) clearTimeout(silenceTimer);
-            silenceTimer = setTimeout(() => {
-              setRecibiendoTelemetria(false);
-              setFrameStream(null);
-            }, 3500);
+              setHistorialIai(prev => [...prev.slice(-24), iaiValor]);
+              setUltimoTimestamp(new Date().toLocaleTimeString());
+
+              // Si no llegan fotogramas en 3.5 segundos, la cámara se considera inactiva
+              if (silenceTimer) clearTimeout(silenceTimer);
+              silenceTimer = setTimeout(() => {
+                setRecibiendoTelemetria(false);
+                setFrameStream(null);
+              }, 3500);
+            }
+          } catch (err) {
+            console.warn('Error parsing WS message in Dashboard:', err);
           }
-        } catch (err) {
-          console.warn('Error parsing WS message in Dashboard:', err);
+        };
+
+        const reintentarConexion = () => {
+          setWsConectado(false);
+          setRecibiendoTelemetria(false);
+          setFrameStream(null);
+          if (pingInterval) clearInterval(pingInterval);
+
+          if (activo && !reconnectTimeout) {
+            reconnectTimeout = setTimeout(() => {
+              reconnectTimeout = null;
+              if (activo) {
+                console.log('[DASHBOARD WS REINTENTO] Reconectando al canal:', codigoEst);
+                conectarWebSocket();
+              }
+            }, 2500);
+          }
+        };
+
+        socket.onerror = reintentarConexion;
+        socket.onclose = reintentarConexion;
+      } catch (e) {
+        setWsConectado(false);
+        setRecibiendoTelemetria(false);
+        setFrameStream(null);
+        if (activo && !reconnectTimeout) {
+          reconnectTimeout = setTimeout(() => {
+            reconnectTimeout = null;
+            if (activo) conectarWebSocket();
+          }, 2500);
         }
-      };
+      }
+    };
 
-      socket.onerror = () => {
-        setWsConectado(false);
-        setRecibiendoTelemetria(false);
-        setFrameStream(null);
-      };
+    conectarWebSocket();
 
-      socket.onclose = () => {
-        setWsConectado(false);
-        setRecibiendoTelemetria(false);
-        setFrameStream(null);
-      };
-    } catch (e) {
+    return () => {
+      activo = false;
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
+      if (pingInterval) clearInterval(pingInterval);
+      if (silenceTimer) clearTimeout(silenceTimer);
+      if (socket) socket.close();
       setWsConectado(false);
       setRecibiendoTelemetria(false);
       setFrameStream(null);
-    }
-
-    return () => {
-      clearInterval(pingInterval);
-      if (silenceTimer) clearTimeout(silenceTimer);
-      if (socket) socket.close();
     };
   }, [codigoBusqueda, estudianteEncontrado]);
 

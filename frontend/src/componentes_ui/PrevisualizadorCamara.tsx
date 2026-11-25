@@ -586,8 +586,9 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
             const snap = offscreenCanvasRef.current;
             const vw = videoRef.current.videoWidth || 640;
             const vh = videoRef.current.videoHeight || 480;
-            const targetW = Math.min(840, vw);
-            const targetH = Math.round((vh / vw) * targetW) || 480;
+            // Transmisión optimizada a 480p adaptativo para eliminar desfase y latencia (< 150ms)
+            const targetW = Math.min(480, vw);
+            const targetH = Math.round((vh / vw) * targetW) || 360;
 
             if (snap.width !== targetW || snap.height !== targetH) {
               snap.width = targetW;
@@ -625,7 +626,8 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
                 }
               }
 
-              const base64 = snap.toDataURL('image/jpeg', 0.82);
+              // Compresión ultraligera al 60% (~16 KB por frame) para transmisión fluida sin congestión TCP
+              const base64 = snap.toDataURL('image/jpeg', 0.60);
               onFrameSnapshot(base64);
             }
           } catch (e) {
