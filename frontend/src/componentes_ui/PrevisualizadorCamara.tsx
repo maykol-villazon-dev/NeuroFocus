@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, forwardRef, useImperativeHandle } from 'react';
-import { Camera, CameraOff, Video, AlertTriangle, CheckCircle2, RefreshCw, Layers, Sparkles, Eye, UserCheck } from 'lucide-react';
+import { Camera, CameraOff, Video, AlertTriangle, CheckCircle2, RefreshCw, Layers, Sparkles, Eye, UserCheck, Activity } from 'lucide-react';
 import { procesarLandmarksMediaPipe, ResultadoBiometrico } from '../servicios_ws/calculo_biometrico';
 
 export interface PrevisualizadorCamaraHandle {
@@ -48,6 +48,8 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
   const ultimoSnapshotRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
   const faceMeshRef = useRef<any>(null);
+  const enviandoFrameRef = useRef<boolean>(false);
+  const handleMediaPipeResultsRef = useRef<(results: any) => void>(() => {});
   const animFrameIdRef = useRef<number | null>(null);
 
   // Referencia mutable reactiva para modoProtegido (Evita stale closures en MediaPipe y permite cambio instantáneo)
@@ -64,6 +66,7 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
   const [resolucionActual, setResolucionActual] = useState<string>('720p (1280x720)');
   const [modoSimulado, setModoSimulado] = useState<boolean>(false);
   const [mostrarMallaFacial, setMostrarMallaFacial] = useState<boolean>(true);
+  const [mallaCargada, setMallaCargada] = useState<boolean>(false);
   const [rostroDetectado, setRostroDetectado] = useState<boolean>(false);
   const [earActualVisual, setEarActualVisual] = useState<number>(0.28);
   const [marActualVisual, setMarActualVisual] = useState<number>(0.25);
@@ -128,7 +131,12 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
             minTrackingConfidence: 0.5
           });
 
-          fm.onResults(handleMediaPipeResults);
+          fm.onResults((res: any) => {
+            setMallaCargada(true);
+            if (handleMediaPipeResultsRef.current) {
+              handleMediaPipeResultsRef.current(res);
+            }
+          });
           faceMeshRef.current = fm;
           console.log('[MEDIAPIPE] Google Face Mesh inicializado con éxito tras', intentos, 'intentos.');
           return true;
@@ -518,72 +526,20 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
 
         ctx.restore();
       }
-
-      // Captura periódica de fotograma compuesto en alta definición (~6 FPS fluido a 160ms) para el monitor en vivo del docente
-      if (onFrameSnapshot && ahora - ultimoSnapshotRef.current >= 160) {
-        ultimoSnapshotRef.current = ahora;
-        if (!offscreenCanvasRef.current) {
-          offscreenCanvasRef.current = document.createElement('canvas');
-        }
-        const snap = offscreenCanvasRef.current;
-        const vw = videoRef.current?.videoWidth || 640;
-        const vh = videoRef.current?.videoHeight || 480;
-
-        // Mantener resolución nítida HD (hasta 840px de ancho) preservando relación de aspecto
-        const targetW = Math.min(840, vw);
-        const targetH = Math.round((vh / vw) * targetW) || 480;
-
-        if (snap.width !== targetW || snap.height !== targetH) {
-          snap.width = targetW;
-          snap.height = targetH;
-        }
-        const sCtx = snap.getContext('2d');
-        if (sCtx && videoRef.current && videoRef.current.readyState >= 2) {
-          try {
-            sCtx.imageSmoothingEnabled = true;
-            sCtx.imageSmoothingQuality = 'high';
-
-            if (modoProtegidoRef.current) {
-              // 🛡️ Anonimización Facial (Privacy by Design / Malla 3D)
-              sCtx.fillStyle = '#0B1120';
-              sCtx.fillRect(0, 0, targetW, targetH);
-              if (canvas) {
-                sCtx.drawImage(canvas, 0, 0, targetW, targetH);
-              }
-              // Banner de Anonimización
-              sCtx.fillStyle = 'rgba(15, 23, 42, 0.75)';
-              sCtx.fillRect(12, 12, targetW - 24, 28);
-              sCtx.fillStyle = '#38BDF8';
-              sCtx.font = 'bold 11px Inter, sans-serif';
-              sCtx.textAlign = 'center';
-              sCtx.fillText('🛡️ MALLA FACIAL 3D ANONIMIZADA (PRIVACY BY DESIGN)', targetW / 2, 30);
-            } else {
-              // Fotograma real de cámara web (con consentimiento firmado)
-              sCtx.save();
-              sCtx.translate(targetW, 0);
-              sCtx.scale(-1, 1);
-              sCtx.drawImage(videoRef.current, 0, 0, targetW, targetH);
-              sCtx.restore();
-
-              if (canvas) {
-                sCtx.drawImage(canvas, 0, 0, targetW, targetH);
-              }
-            }
-
-            // Calidad JPEG nítida y clara al 82% (0.82) sin artefactos de compresión
-            const base64 = snap.toDataURL('image/jpeg', 0.82);
-            onFrameSnapshot(base64);
-          } catch (e) {
-            // Manejo de canvas no disponible
-          }
-        }
-      }
     } else {
       framesSinRostroRef.current += 1;
       const esAusente = framesSinRostroRef.current >= 10;
       if (esAusente) {
         setRostroDetectado(false);
         setAlertaVisualActiva('Estudiante Fuera de Cámara');
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.85)';
+        ctx.fillRect(16, 16, w - 32, 42);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 15px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('⚠️ ESTUDIANTE FUERA DE ENCUADRE / AUSENTE', w / 2, 42);
       }
       if (onMetricasEnVivo) {
         onMetricasEnVivo({
@@ -603,104 +559,89 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
           esSomnolencia: false
         });
       }
-
-      // Transmisión continua fluida a 160ms cuando el estudiante se sale del encuadre (evita congelamiento)
-      if (onFrameSnapshot && performance.now() - ultimoSnapshotRef.current >= 160) {
-        ultimoSnapshotRef.current = performance.now();
-        let snap = offscreenCanvasRef.current;
-        if (!snap) {
-          snap = document.createElement('canvas');
-          offscreenCanvasRef.current = snap;
-        }
-        const vw = videoRef.current?.videoWidth || 640;
-        const vh = videoRef.current?.videoHeight || 480;
-        const targetW = Math.min(840, vw);
-        const targetH = Math.round((vh / vw) * targetW) || 480;
-        if (snap.width !== targetW || snap.height !== targetH) {
-          snap.width = targetW;
-          snap.height = targetH;
-        }
-        const sCtx = snap.getContext('2d');
-        if (sCtx && videoRef.current && videoRef.current.readyState >= 2) {
-          try {
-            sCtx.imageSmoothingEnabled = true;
-            sCtx.imageSmoothingQuality = 'high';
-
-            if (modoProtegidoRef.current) {
-              sCtx.fillStyle = '#0B1120';
-              sCtx.fillRect(0, 0, targetW, targetH);
-            } else {
-              sCtx.save();
-              sCtx.translate(targetW, 0);
-              sCtx.scale(-1, 1);
-              sCtx.drawImage(videoRef.current, 0, 0, targetW, targetH);
-              sCtx.restore();
-            }
-
-            // Rótulo informativo en vivo sobre el frame
-            sCtx.fillStyle = 'rgba(239, 68, 68, 0.85)';
-            sCtx.fillRect(16, 16, targetW - 32, 42);
-            sCtx.fillStyle = '#ffffff';
-            sCtx.font = 'bold 15px sans-serif';
-            sCtx.textAlign = 'center';
-            sCtx.fillText('⚠️ ESTUDIANTE FUERA DE ENCUADRE / AUSENTE', targetW / 2, 42);
-
-            const base64 = snap.toDataURL('image/jpeg', 0.82);
-            onFrameSnapshot(base64);
-          } catch (e) {
-            // Manejo de excepción canvas
-          }
-        }
-      }
     }
-  }, [mostrarMallaFacial, onMetricasEnVivo, onFrameSnapshot]);
+  }, [mostrarMallaFacial, onMetricasEnVivo]);
 
-  // 4. Bucle de Procesamiento continuo de fotogramas
+  handleMediaPipeResultsRef.current = handleMediaPipeResults;
+
+  // 4. Bucle de Procesamiento continuo y Transmisión de Streaming en Vivo
   useEffect(() => {
     let activo = true;
-    let fallbackSnapshotTimer: any = null;
 
     const procesarFrame = async () => {
       if (!activo) return;
 
-      if (camaraActiva && !modoSimulado && videoRef.current) {
-        // Si FaceMesh ya está listo, procesar detección facial
-        if (faceMeshRef.current && videoRef.current.readyState >= 2) {
+      if (camaraActiva && !modoSimulado && videoRef.current && videoRef.current.readyState >= 2) {
+        const ahora = performance.now();
+
+        // 1. TRANSMISIÓN GARANTIZADA DE FOTOGRAMAS AL MONITOR CADA 160ms (~6 FPS):
+        // Se ejecuta SIEMPRE que la webcam física esté encendida, garantizando que el psicólogo
+        // vea al estudiante sin importar si MediaPipe está compilando, procesando o con lag.
+        if (onFrameSnapshot && ahora - ultimoSnapshotRef.current >= 160) {
+          ultimoSnapshotRef.current = ahora;
           try {
-            await faceMeshRef.current.send({ image: videoRef.current });
-          } catch (e) {
-            // Manejo de excepciones de fotograma
-          }
-        } else if (!faceMeshRef.current && videoRef.current.readyState >= 2 && onFrameSnapshot) {
-          // Si FaceMesh aún está descargando WASM pero la cámara ya tiene video,
-          // enviar fotograma crudo cada 160ms para no dejar el monitor en negro
-          const ahora = performance.now();
-          if (ahora - ultimoSnapshotRef.current >= 160) {
-            ultimoSnapshotRef.current = ahora;
-            try {
-              if (!offscreenCanvasRef.current) {
-                offscreenCanvasRef.current = document.createElement('canvas');
-              }
-              const snap = offscreenCanvasRef.current;
-              const vw = videoRef.current.videoWidth || 640;
-              const vh = videoRef.current.videoHeight || 480;
-              const targetW = Math.min(840, vw);
-              const targetH = Math.round((vh / vw) * targetW) || 480;
-              if (snap.width !== targetW || snap.height !== targetH) {
-                snap.width = targetW;
-                snap.height = targetH;
-              }
-              const sCtx = snap.getContext('2d');
-              if (sCtx) {
+            if (!offscreenCanvasRef.current) {
+              offscreenCanvasRef.current = document.createElement('canvas');
+            }
+            const snap = offscreenCanvasRef.current;
+            const vw = videoRef.current.videoWidth || 640;
+            const vh = videoRef.current.videoHeight || 480;
+            const targetW = Math.min(840, vw);
+            const targetH = Math.round((vh / vw) * targetW) || 480;
+
+            if (snap.width !== targetW || snap.height !== targetH) {
+              snap.width = targetW;
+              snap.height = targetH;
+            }
+            const sCtx = snap.getContext('2d');
+            if (sCtx) {
+              sCtx.imageSmoothingEnabled = true;
+              sCtx.imageSmoothingQuality = 'high';
+
+              if (modoProtegidoRef.current) {
+                // Modo protegido / anonimizado
+                sCtx.fillStyle = '#0B1120';
+                sCtx.fillRect(0, 0, targetW, targetH);
+                if (canvasOverlayRef.current) {
+                  sCtx.drawImage(canvasOverlayRef.current, 0, 0, targetW, targetH);
+                }
+                sCtx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+                sCtx.fillRect(12, 12, targetW - 24, 28);
+                sCtx.fillStyle = '#38BDF8';
+                sCtx.font = 'bold 11px Inter, sans-serif';
+                sCtx.textAlign = 'center';
+                sCtx.fillText('🛡️ MALLA FACIAL 3D ANONIMIZADA (PRIVACY BY DESIGN)', targetW / 2, 30);
+              } else {
+                // Video real de la cámara web (modo auditado)
                 sCtx.save();
                 sCtx.translate(targetW, 0);
                 sCtx.scale(-1, 1);
                 sCtx.drawImage(videoRef.current, 0, 0, targetW, targetH);
                 sCtx.restore();
-                const base64 = snap.toDataURL('image/jpeg', 0.82);
-                onFrameSnapshot(base64);
+
+                // Si MediaPipe ya dibujó la malla facial en canvasOverlay, superponerla en caliente
+                if (canvasOverlayRef.current) {
+                  sCtx.drawImage(canvasOverlayRef.current, 0, 0, targetW, targetH);
+                }
               }
-            } catch (err) {}
+
+              const base64 = snap.toDataURL('image/jpeg', 0.82);
+              onFrameSnapshot(base64);
+            }
+          } catch (e) {
+            console.warn('[FRAME SNAPSHOT ERROR]:', e);
+          }
+        }
+
+        // 2. ENVIAR FOTOGRAMA A MEDIAPIPE (Con semáforo para no saturar WebAssembly ni WebGL):
+        if (faceMeshRef.current && !enviandoFrameRef.current) {
+          enviandoFrameRef.current = true;
+          try {
+            await faceMeshRef.current.send({ image: videoRef.current });
+          } catch (e) {
+            console.warn('[MEDIAPIPE FRAME ERROR]:', e);
+          } finally {
+            enviandoFrameRef.current = false;
           }
         }
       }
@@ -719,7 +660,6 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
       if (animFrameIdRef.current) {
         cancelAnimationFrame(animFrameIdRef.current);
       }
-      if (fallbackSnapshotTimer) clearInterval(fallbackSnapshotTimer);
     };
   }, [camaraActiva, modoSimulado, onFrameSnapshot]);
 
@@ -952,6 +892,14 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
               </span>
               {!modoSimulado && (
                 <>
+                  <span className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold whitespace-nowrap transition-colors duration-200 ${
+                    mallaCargada
+                      ? 'bg-purple-500/10 text-purple-400 border-purple-500/30'
+                      : 'bg-amber-500/10 text-amber-400 border-amber-500/30 animate-pulse'
+                  }`}>
+                    <Activity className="w-3.5 h-3.5" />
+                    {mallaCargada ? 'Malla 3D IA' : 'Cargando IA Facial...'}
+                  </span>
                   <span className={`flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-bold whitespace-nowrap transition-colors duration-200 ${
                     rostroDetectado
                       ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30'
