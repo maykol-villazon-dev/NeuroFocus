@@ -564,6 +564,11 @@ async def eliminar_usuario(
 
 class AprobarUsuarioRequest(BaseModel):
     nuevo_rol: Optional[str] = None
+    id_curso: Optional[str] = None
+    grado_escolar: Optional[str] = None
+    subtipo_tdah: Optional[SubtipoTDAH] = SubtipoTDAH.F90_2
+    edad: Optional[int] = 14
+    nombre_completo: Optional[str] = None
 
 
 @router.get("/usuarios/pendientes")
@@ -620,6 +625,8 @@ async def aprobar_usuario_pendiente(
     """
     Aprueba y activa una cuenta pendiente, permitiéndole iniciar sesión.
     Si se especifica nuevo_rol, se actualiza su asignación (ideal para solicitudes con 'SIN_ROL').
+    Si el rol asignado es 'ESTUDIANTE', crea automáticamente su perfil en la tabla 'estudiantes'
+    asociándole un código único institucional (EST-2026-XXX) y su curso/grado escolar obligatorio.
     """
     res = await db.execute(select(Usuario).where(Usuario.id_usuario == id_usuario))
     usuario = res.scalars().first()
@@ -642,14 +649,73 @@ async def aprobar_usuario_pendiente(
             except (KeyError, ValueError):
                 usuario.rol = rol_obj.nombre_rol
 
+    rol_final = usuario.rol.value if hasattr(usuario.rol, "value") else str(usuario.rol)
+    codigo_asignado = None
+
+    # Si el usuario es aprobado como ESTUDIANTE, garantizar creación de ficha clínica/escolar
+    if rol_final == "ESTUDIANTE":
+        # Verificar si ya existe en la tabla estudiantes
+        res_est = await db.execute(select(Estudiante).where(Estudiante.id_usuario == usuario.id_usuario))
+        est_existente = res_est.scalars().first()
+
+        if not est_existente:
+            # Obtener nombre del grado a partir del curso o del campo directo
+            grado_nombre = payload.grado_escolar if (payload and payload.grado_escolar) else None
+            if payload and payload.id_curso and not grado_nombre:
+                res_c = await db.execute(select(Curso).where(Curso.id_curso == payload.id_curso))
+                curso_obj = res_c.scalars().first()
+                if curso_obj:
+                    grado_nombre = curso_obj.nombre_curso
+
+            if not grado_nombre:
+                # Obtener el primer curso activo disponible como fallback
+                res_first_c = await db.execute(select(Curso).where(Curso.activo == True).order_by(Curso.fecha_creacion.asc()))
+                first_c = res_first_c.scalars().first()
+                grado_nombre = first_c.nombre_curso if first_c else "1º de Secundaria"
+
+            codigo_asignado = f"EST-2026-{uuid.uuid4().hex[:3].upper()}"
+            subtipo = payload.subtipo_tdah if (payload and payload.subtipo_tdah) else SubtipoTDAH.F90_2
+            nombre_alumno = payload.nombre_completo if (payload and payload.nombre_completo) else usuario.username
+
+            nuevo_est = Estudiante(
+                id_estudiante=str(uuid.uuid4()),
+                codigo_estudiante=codigo_asignado,
+                nombre_completo=nombre_alumno,
+                edad=payload.edad if (payload and payload.edad) else 14,
+                grado_escolar=grado_nombre,
+                subtipo_tdah=subtipo,
+                diagnostico_observacion="Alta aprobada institucionalmente por Superadministrador",
+                protegido=True,
+                id_usuario=usuario.id_usuario
+            )
+            db.add(nuevo_est)
+
+            # Registrar auditoría de consentimiento Ley 548
+            aud_cons = AuditoriaConsentimiento(
+                id_consentimiento=str(uuid.uuid4()),
+                id_usuario=usuario.id_usuario,
+                rol_usuario=str(usuario.rol),
+                codigo_estudiante_asociado=codigo_asignado,
+                version_documento="1.0-2026",
+                ip_registro="127.0.0.1",
+                user_agent="Aprobación Superadministrador"
+            )
+            db.add(aud_cons)
+        else:
+            codigo_asignado = est_existente.codigo_estudiante
+
     await db.commit()
 
-    rol_final = usuario.rol.value if hasattr(usuario.rol, "value") else str(usuario.rol)
+    mensaje_resp = f"La cuenta de '{usuario.username}' fue aprobada exitosamente con el rol '{rol_final}'."
+    if codigo_asignado:
+        mensaje_resp += f" Código de estudiante asignado: {codigo_asignado}."
+
     return {
         "ok": True,
-        "mensaje": f"La cuenta de '{usuario.username}' fue aprobada exitosamente con el rol '{rol_final}'. Ya puede iniciar sesión.",
+        "mensaje": mensaje_resp,
         "id_usuario": usuario.id_usuario,
         "rol": rol_final,
+        "codigo_estudiante": codigo_asignado,
         "verificado": True
     }
 

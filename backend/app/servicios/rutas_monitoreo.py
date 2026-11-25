@@ -12,7 +12,7 @@ import math
 from app.persistencia.config_db import get_db
 from app.persistencia.modelos_orm import (
     Usuario, SesionMonitoreo, ParametrosCalibracion, Estudiante, EstadoSesion, SubtipoTDAH,
-    MetricaAtencional, EventoDesatencion, ahora_bolivia
+    MetricaAtencional, EventoDesatencion, RolUsuario, ahora_bolivia
 )
 from app.autenticacion_rbac.rutas_auth import get_usuario_actual, obtener_permisos_usuario
 
@@ -106,6 +106,41 @@ async def listar_estudiantes(
     """Retorna la lista de estudiantes filtrada estrictamente por los permisos RBAC del usuario solicitante."""
     permisos = await obtener_permisos_usuario(usuario_actual, db)
     rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+
+    # Sincronización preventiva / Autocuración: asegurar que usuarios con rol ESTUDIANTE tengan su fila en 'estudiantes'
+    try:
+        res_u_est = await db.execute(
+            select(Usuario).where(
+                (Usuario.rol == "ESTUDIANTE") | (Usuario.rol == RolUsuario.ESTUDIANTE),
+                Usuario.verificado == True
+            )
+        )
+        usuarios_estudiantes = res_u_est.scalars().all()
+        if usuarios_estudiantes:
+            res_ids = await db.execute(select(Estudiante.id_usuario))
+            ids_con_estudiante = set(r for r in res_ids.scalars().all() if r)
+
+            hubo_curacion = False
+            for u in usuarios_estudiantes:
+                if u.id_usuario not in ids_con_estudiante:
+                    cod_auto = f"EST-2026-{uuid.uuid4().hex[:3].upper()}"
+                    nuevo_est = Estudiante(
+                        id_estudiante=str(uuid.uuid4()),
+                        codigo_estudiante=cod_auto,
+                        nombre_completo=u.username,
+                        edad=14,
+                        grado_escolar="1º de Secundaria",
+                        subtipo_tdah=SubtipoTDAH.F90_2,
+                        diagnostico_observacion="Autocuración por rol verificado de Estudiante",
+                        protegido=True,
+                        id_usuario=u.id_usuario
+                    )
+                    db.add(nuevo_est)
+                    hubo_curacion = True
+            if hubo_curacion:
+                await db.commit()
+    except Exception as e:
+        print(f"[WARN] Error en sincronización preventiva de estudiantes: {e}")
 
     query = (
         select(Estudiante)

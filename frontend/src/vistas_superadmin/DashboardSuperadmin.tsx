@@ -251,10 +251,14 @@ export const DashboardSuperadmin: React.FC = () => {
     abierto: boolean;
     usuario: UsuarioPendienteItem | null;
     rolAsignar: string;
+    idCursoAsignar: string;
+    subtipoTdahAsignar: string;
   }>({
     abierto: false,
     usuario: null,
-    rolAsignar: ''
+    rolAsignar: '',
+    idCursoAsignar: '',
+    subtipoTdahAsignar: 'F90_2'
   });
   const [modalRechazarUsuario, setModalRechazarUsuario] = useState<{
     abierto: boolean;
@@ -367,11 +371,16 @@ export const DashboardSuperadmin: React.FC = () => {
   const handleConfirmarAprobarUsuario = async () => {
     if (!modalAprobarUsuario.usuario) return;
     try {
-      const resp = await apiCliente.put(`/superadmin/usuarios/${modalAprobarUsuario.usuario.id_usuario}/aprobar`, {
+      const payload: any = {
         nuevo_rol: modalAprobarUsuario.rolAsignar || undefined
-      });
+      };
+      if (modalAprobarUsuario.rolAsignar === 'ESTUDIANTE') {
+        payload.id_curso = modalAprobarUsuario.idCursoAsignar || undefined;
+        payload.subtipo_tdah = modalAprobarUsuario.subtipoTdahAsignar || 'F90_2';
+      }
+      const resp = await apiCliente.put(`/superadmin/usuarios/${modalAprobarUsuario.usuario.id_usuario}/aprobar`, payload);
       const usuarioAprobado = modalAprobarUsuario.usuario.username;
-      setModalAprobarUsuario({ abierto: false, usuario: null, rolAsignar: '' });
+      setModalAprobarUsuario({ abierto: false, usuario: null, rolAsignar: '', idCursoAsignar: '', subtipoTdahAsignar: 'F90_2' });
       setModalNotificacion({
         abierto: true,
         tipo: 'EXITO',
@@ -381,6 +390,7 @@ export const DashboardSuperadmin: React.FC = () => {
       cargarUsuariosPendientes();
       cargarDashboard();
       cargarUsuarios();
+      cargarEstudiantesTutores();
     } catch (err: any) {
       setModalNotificacion({
         abierto: true,
@@ -592,6 +602,7 @@ export const DashboardSuperadmin: React.FC = () => {
     if (seccionActiva === 'USUARIOS_PENDIENTES') {
       cargarUsuariosPendientes();
       if (rolesList.length === 0) cargarRolesYPermisos();
+      if (cursos.length === 0) cargarCursos();
     }
     if (seccionActiva === 'ROLES_PERMISOS') cargarRolesYPermisos();
     if (seccionActiva === 'PRIVACIDAD_CAP5') cargarAuditoriaLegal();
@@ -610,6 +621,7 @@ export const DashboardSuperadmin: React.FC = () => {
     if (seccionActiva === 'USUARIOS_PENDIENTES') {
       cargarUsuariosPendientes();
       cargarRolesYPermisos();
+      cargarCursos();
     }
     if (seccionActiva === 'ROLES_PERMISOS') cargarRolesYPermisos();
     if (seccionActiva === 'PRIVACIDAD_CAP5') cargarAuditoriaLegal();
@@ -1611,10 +1623,15 @@ export const DashboardSuperadmin: React.FC = () => {
                                 <button
                                   onClick={() => {
                                     if (rolesList.length === 0) cargarRolesYPermisos();
+                                    if (cursos.length === 0) cargarCursos();
+                                    const rolDef = sol.rol === 'SIN_ROL' ? 'DOCENTE' : sol.rol;
+                                    const primerCurso = cursos.find(c => c.activo)?.id_curso || (cursos[0]?.id_curso || '');
                                     setModalAprobarUsuario({
                                       abierto: true,
                                       usuario: sol,
-                                      rolAsignar: sol.rol === 'SIN_ROL' ? 'DOCENTE' : sol.rol
+                                      rolAsignar: rolDef,
+                                      idCursoAsignar: primerCurso,
+                                      subtipoTdahAsignar: 'F90_2'
                                     });
                                   }}
                                   className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition flex items-center gap-1.5 font-bold shadow-lg shadow-emerald-600/20 cursor-pointer"
@@ -2743,7 +2760,17 @@ export const DashboardSuperadmin: React.FC = () => {
                 </label>
                 <select
                   value={modalAprobarUsuario.rolAsignar}
-                  onChange={(e) => setModalAprobarUsuario(prev => ({ ...prev, rolAsignar: e.target.value }))}
+                  onChange={(e) => {
+                    const nuevoRol = e.target.value;
+                    if (nuevoRol === 'ESTUDIANTE' && cursos.length === 0) {
+                      cargarCursos();
+                    }
+                    setModalAprobarUsuario(prev => ({
+                      ...prev,
+                      rolAsignar: nuevoRol,
+                      idCursoAsignar: prev.idCursoAsignar || (cursos.find(c => c.activo)?.id_curso || (cursos[0]?.id_curso || ''))
+                    }));
+                  }}
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-white outline-none focus:border-indigo-500 text-xs font-semibold"
                 >
                   {rolesList.filter(r => r.nombre_rol !== 'SIN_ROL').length > 0 ? (
@@ -2764,12 +2791,64 @@ export const DashboardSuperadmin: React.FC = () => {
                   Al aprobar, se marcará <strong className="text-emerald-400">verificado = true</strong> y el usuario podrá iniciar sesión inmediatamente con el rol <strong>{modalAprobarUsuario.rolAsignar}</strong>.
                 </p>
               </div>
+
+              {/* CAMPOS REQUERIDOS AL ASIGNAR ROL DE ESTUDIANTE */}
+              {modalAprobarUsuario.rolAsignar === 'ESTUDIANTE' && (
+                <div className="p-3.5 bg-indigo-950/40 border border-indigo-500/30 rounded-2xl space-y-3 animate-in fade-in duration-200">
+                  <div className="flex items-center gap-2 text-indigo-300 font-bold">
+                    <GraduationCap className="w-4 h-4 text-indigo-400" />
+                    <span>Ficha Institucional del Estudiante</span>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-300 font-semibold block">
+                      Asignar Curso / Grado Escolar *
+                    </label>
+                    <select
+                      value={modalAprobarUsuario.idCursoAsignar}
+                      onChange={(e) => setModalAprobarUsuario(prev => ({ ...prev, idCursoAsignar: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none focus:border-indigo-500 text-xs"
+                    >
+                      {cursos.filter(c => c.activo).length > 0 ? (
+                        cursos.filter(c => c.activo).map(c => (
+                          <option key={c.id_curso} value={c.id_curso} className="bg-slate-900 text-white">
+                            {c.nombre_curso} ({c.nivel_academico})
+                          </option>
+                        ))
+                      ) : (
+                        <option value="" className="bg-slate-900 text-slate-400">
+                          1º de Secundaria (Curso por defecto)
+                        </option>
+                      )}
+                    </select>
+                    <p className="text-[10px] text-slate-400">
+                      El estudiante quedará matriculado y podrá ver los materiales y tareas de este curso.
+                    </p>
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-slate-300 font-semibold block">
+                      Subtipo Clínico TDAH (DSM-5-TR)
+                    </label>
+                    <select
+                      value={modalAprobarUsuario.subtipoTdahAsignar}
+                      onChange={(e) => setModalAprobarUsuario(prev => ({ ...prev, subtipoTdahAsignar: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-white outline-none focus:border-indigo-500 text-xs"
+                    >
+                      <option value="F90_2" className="bg-slate-900 text-white">F90.2 — Presentación Combinada</option>
+                      <option value="F90_0" className="bg-slate-900 text-white">F90.0 — Predominio Déficit de Atención (Inatento)</option>
+                      <option value="F90_1" className="bg-slate-900 text-white">F90.1 — Predominio Hiperactividad / Impulsividad</option>
+                      <option value="CONTROL" className="bg-slate-900 text-white">CONTROL — Grupo Control (Sin TDAH)</option>
+                    </select>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => setModalAprobarUsuario({ abierto: false, usuario: null, rolAsignar: '' })}
+                onClick={() => setModalAprobarUsuario({ abierto: false, usuario: null, rolAsignar: '', idCursoAsignar: '', subtipoTdahAsignar: 'F90_2' })}
                 className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-semibold text-xs transition cursor-pointer"
               >
                 Cancelar
