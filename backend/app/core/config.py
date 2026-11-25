@@ -3,7 +3,14 @@ from pydantic_settings import BaseSettings
 from typing import Optional
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
-DB_PATH = BACKEND_DIR / "monitoreo_tdah.db"
+
+# En contenedor de producción persistente montado en /app_db/monitoreo_tdah.db
+# Si existe el directorio montado /app_db, alojar allí la base de datos para persistencia permanente
+PROD_DB_DIR = Path("/app_db")
+if PROD_DB_DIR.exists():
+    DB_PATH = PROD_DB_DIR / "monitoreo_tdah.db"
+else:
+    DB_PATH = BACKEND_DIR / "monitoreo_tdah.db"
 
 
 class Settings(BaseSettings):

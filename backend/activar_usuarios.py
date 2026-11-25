@@ -1,9 +1,21 @@
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path("/app/monitoreo_tdah.db")
-if not DB_PATH.exists():
-    DB_PATH = Path("monitoreo_tdah.db")
+# Buscar en /app_db (volumen persistente en contenedor) o en /app o en local
+rutas = [
+    Path("/app_db/monitoreo_tdah.db"),
+    Path("/app/monitoreo_tdah.db"),
+    Path("monitoreo_tdah.db")
+]
+
+DB_PATH = None
+for r in rutas:
+    if r.exists():
+        DB_PATH = r
+        break
+
+if not DB_PATH:
+    DB_PATH = Path("/app/monitoreo_tdah.db")
 
 print(f"Examinando base de datos: {DB_PATH.resolve()}")
 

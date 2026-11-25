@@ -12,7 +12,7 @@ services:
     volumes:
       - ./backend/almacen_capturas:/app/almacen_capturas
       - ./backend/almacen_materiales:/app/almacen_materiales
-      - ./backend/monitoreo_tdah.db:/app/monitoreo_tdah.db
+      - backend_sqlite_data:/app_db
     ports:
       - "8000:8000"
 
@@ -28,3 +28,7 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - backend
+
+volumes:
+  backend_sqlite_data:
+

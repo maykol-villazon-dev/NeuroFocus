@@ -4,8 +4,16 @@ from pathlib import Path
 
 # Rutas dentro del contenedor
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "monitoreo_tdah.db"
-SQL_PATH = BASE_DIR / "dump_local.sql"
+
+# Si existe el volumen persistente /app_db, usarlo
+if Path("/app_db").exists():
+    DB_PATH = Path("/app_db/monitoreo_tdah.db")
+else:
+    DB_PATH = BASE_DIR / "monitoreo_tdah.db"
+
+SQL_PATH = BASE_DIR / "dump_completo.sql"
+if not SQL_PATH.exists():
+    SQL_PATH = BASE_DIR / "dump_local.sql"
 
 print(f"Ruta BD: {DB_PATH}")
 print(f"Ruta SQL: {SQL_PATH}")
