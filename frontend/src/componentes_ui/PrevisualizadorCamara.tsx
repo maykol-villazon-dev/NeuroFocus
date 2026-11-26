@@ -84,6 +84,24 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
   const narizYBaseRef = useRef<number>(0.5);
   const tiempoInicioSlumpingRef = useRef<number>(0);
 
+  // Anclaje y Seguimiento Espacial del Sujeto Foco (Target Subject Tracking)
+  // Evita que segundas o terceras personas suplanten al estudiante que inició la sesión
+  const perfilFocoEstudianteRef = useRef<{
+    centroideX: number;
+    centroideY: number;
+    anchoRostro: number;
+    altoRostro: number;
+    anclado: boolean;
+    ultimoVistoTs: number;
+  }>({
+    centroideX: 0.5,
+    centroideY: 0.5,
+    anchoRostro: 0.25,
+    altoRostro: 0.35,
+    anclado: false,
+    ultimoVistoTs: 0
+  });
+
   // Escuchar eventos de interacción de lectura (Scroll, Clicks, Teclas) para descartar mirada perdida
   useEffect(() => {
     if (timestampUltimaInteraccion && timestampUltimaInteraccion !== interaccionPreviaTsRef.current) {
@@ -182,7 +200,88 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
     const distractorExterno = numRostros > 1;
 
     if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
-      const landmarks = results.multiFaceLandmarks[0];
+      const ahora = performance.now();
+      const todosRostros = results.multiFaceLandmarks;
+
+      // =========================================================================
+      // ALGORITMO TARGET SUBJECT TRACKING (SEGUIMIENTO DEL ESTUDIANTE FOCO)
+      // =========================================================================
+      // Evita que segundas o terceras personas suplanten al estudiante principal
+      let indiceFoco = 0;
+      const perfilFoco = perfilFocoEstudianteRef.current;
+
+      // Extraer métricas espaciales de cada rostro detectado en este fotograma
+      const rostrosInfo = todosRostros.map((rostro: any[], idx: number) => {
+        const nariz = rostro[1] || { x: 0.5, y: 0.5 };
+        const sienIzq = rostro[234] || { x: 0.4, y: 0.5 };
+        const sienDer = rostro[454] || { x: 0.6, y: 0.5 };
+        const menton = rostro[152] || { x: 0.5, y: 0.7 };
+        const coronilla = rostro[10] || { x: 0.5, y: 0.3 };
+
+        const ancho = Math.hypot(sienDer.x - sienIzq.x, sienDer.y - sienIzq.y) || 0.2;
+        const alto = Math.hypot(menton.x - coronilla.x, menton.y - coronilla.y) || 0.3;
+        const distCentroPantalla = Math.hypot(nariz.x - 0.5, nariz.y - 0.5);
+
+        return {
+          idx,
+          cx: nariz.x,
+          cy: nariz.y,
+          ancho,
+          alto,
+          distCentroPantalla
+        };
+      });
+
+      if (!perfilFoco.anclado) {
+        // Primer fotograma con rostros: seleccionar al más centrado y cercano a cámara
+        let mejorCandidato = rostrosInfo[0];
+        let menorDistCentro = mejorCandidato.distCentroPantalla;
+
+        for (let i = 1; i < rostrosInfo.length; i++) {
+          if (rostrosInfo[i].distCentroPantalla < menorDistCentro) {
+            menorDistCentro = rostrosInfo[i].distCentroPantalla;
+            mejorCandidato = rostrosInfo[i];
+          }
+        }
+
+        indiceFoco = mejorCandidato.idx;
+        perfilFoco.centroideX = mejorCandidato.cx;
+        perfilFoco.centroideY = mejorCandidato.cy;
+        perfilFoco.anchoRostro = mejorCandidato.ancho;
+        perfilFoco.altoRostro = mejorCandidato.alto;
+        perfilFoco.anclado = true;
+        perfilFoco.ultimoVistoTs = ahora;
+      } else {
+        // Si ya hay un perfil anclado, calcular costo de afinidad espacial para cada rostro
+        let mejorCosto = Infinity;
+        let mejorIdx = 0;
+
+        for (const r of rostrosInfo) {
+          const distEuclidea = Math.hypot(r.cx - perfilFoco.centroideX, r.cy - perfilFoco.centroideY);
+          const diffEscala = Math.abs(r.ancho - perfilFoco.anchoRostro) / Math.max(0.01, perfilFoco.anchoRostro);
+          
+          // Costo ponderado: 70% consistencia espacial con el estudiante previo + 30% consistencia de escala
+          const costo = distEuclidea * 0.70 + diffEscala * 0.30;
+
+          if (costo < mejorCosto) {
+            mejorCosto = costo;
+            mejorIdx = r.idx;
+          }
+        }
+
+        indiceFoco = mejorIdx;
+
+        // Actualización exponencial suave (EMA) de la posición del estudiante foco
+        const rFoco = rostrosInfo[indiceFoco];
+        const alfa = 0.25; // Inercia que absorbe movimientos leves sin perder al alumno
+        perfilFoco.centroideX = perfilFoco.centroideX * (1 - alfa) + rFoco.cx * alfa;
+        perfilFoco.centroideY = perfilFoco.centroideY * (1 - alfa) + rFoco.cy * alfa;
+        perfilFoco.anchoRostro = perfilFoco.anchoRostro * (1 - alfa) + rFoco.ancho * alfa;
+        perfilFoco.altoRostro = perfilFoco.altoRostro * (1 - alfa) + rFoco.alto * alfa;
+        perfilFoco.ultimoVistoTs = ahora;
+      }
+
+      const landmarks = results.multiFaceLandmarks[indiceFoco];
       framesSinRostroRef.current = 0;
       setRostroDetectado(true);
 
@@ -190,8 +289,6 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
       const metricas = procesarLandmarksMediaPipe(landmarks);
       setEarActualVisual(metricas.earPromedio);
       setMarActualVisual(metricas.mar);
-
-      const ahora = performance.now();
 
       // Ventana móvil de EAR de los últimos ~30 fotogramas (calibración adaptativa en vivo)
       if (metricas.earPromedio > 0.12) {
@@ -506,9 +603,11 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
           ctx.stroke();
         }
 
-        // 6. Resaltado de Distractores Externos (Múltiples rostros en aula)
+        // 6. Resaltado de Distractores Externos (Todos los rostros que no son el estudiante foco)
         if (results.multiFaceLandmarks.length > 1) {
-          for (let f = 1; f < results.multiFaceLandmarks.length; f++) {
+          for (let f = 0; f < results.multiFaceLandmarks.length; f++) {
+            if (f === indiceFoco) continue; // Saltar al estudiante foco
+
             const secLandmarks = results.multiFaceLandmarks[f];
             const secNariz = secLandmarks[1];
             if (secNariz) {
@@ -838,6 +937,15 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
     setModoSimulado(false);
     setCamaraActiva(false);
     setRostroDetectado(false);
+    // Reiniciar perfil de anclaje para que la próxima sesión calibre al nuevo estudiante de manera limpia
+    perfilFocoEstudianteRef.current = {
+      centroideX: 0.5,
+      centroideY: 0.5,
+      anchoRostro: 0.25,
+      altoRostro: 0.35,
+      anclado: false,
+      ultimoVistoTs: 0
+    };
     if (onCamaraEstadoChange) onCamaraEstadoChange(false);
     if (onFrameSnapshot) onFrameSnapshot('');
   };
