@@ -434,20 +434,24 @@ export const PortalEstudiante: React.FC = () => {
   // Finalizar formalmente la sesión y persistir en la Base de Datos SQLite
   const finalizarSesionClase = async () => {
     const cod = usuario?.codigo_estudiante || 'EST-2026-001';
+    // 1. Apagar físicamente la cámara web y detener los tracks de video de inmediato
+    if (camaraRef.current) {
+      camaraRef.current.apagarCamara();
+    }
+    setCamaraActiva(false);
+
     try {
       await apiCliente.post(`/monitoreo/finalizar-sesion/${cod}`);
-      setCamaraActiva(false);
       setModalNotificacion({
         abierto: true,
         tipo: 'EXITO',
         titulo: 'Sesión Finalizada con Éxito',
-        mensaje: 'La sesión de monitoreo fue finalizada y todas las métricas atencionales han sido guardadas y consolidadas en la base de datos.',
+        mensaje: 'La sesión de monitoreo fue finalizada, la cámara se ha apagado y todas las métricas atencionales han sido guardadas y consolidadas en la base de datos.',
         detalles: `Estudiante: ${perfilEstudiante?.nombre_completo || usuario?.username || 'Estudiante'} • Código: ${cod}`,
         textoBoton: 'Aceptar'
       });
     } catch (err) {
       console.warn('Error finalizando sesión en servidor:', err);
-      setCamaraActiva(false);
       setModalNotificacion({
         abierto: true,
         tipo: 'ADVERTENCIA',
@@ -712,9 +716,9 @@ export const PortalEstudiante: React.FC = () => {
                 </div>
                 <button
                   onClick={finalizarSesionClase}
-                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-1.5 cursor-pointer"
+                  className="px-5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-600/30 transition flex items-center gap-2 cursor-pointer"
                 >
-                  <CameraOff className="w-4 h-4" /> Finalizar y Guardar Sesión
+                  <CameraOff className="w-4 h-4" /> Finalizar
                 </button>
               </div>
             )}

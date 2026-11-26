@@ -462,7 +462,7 @@ export const ModoEstudio: React.FC<ModoEstudioProps> = ({
               onClick={onFinalizarSesion}
               className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-rose-600/20 transition flex items-center gap-1.5 cursor-pointer"
             >
-              <CameraOff className="w-4 h-4" /> Finalizar y Guardar Sesión
+              <CameraOff className="w-4 h-4" /> Finalizar
             </button>
           )}
 

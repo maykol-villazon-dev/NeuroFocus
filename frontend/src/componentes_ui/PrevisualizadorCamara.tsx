@@ -1013,30 +1013,26 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
         )}
       </div>
 
-      {/* Botones de Acción */}
-      <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-        <button
-          onClick={camaraActiva ? apagarCamara : encenderCamara}
-          disabled={cargandoPermiso}
-          className={`px-6 py-3 font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-2 ${
-            camaraActiva
-              ? 'bg-rose-500 hover:bg-rose-400 text-white shadow-rose-500/20'
-              : 'bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20'
-          }`}
-        >
-          {camaraActiva ? <CameraOff className="w-4 h-4" /> : <Camera className="w-4 h-4" />}
-          {camaraActiva ? 'Apagar Cámara' : 'Encender Cámara Web Real (720p)'}
-        </button>
+      {/* Botones de Acción (Solo se muestran cuando la cámara está apagada para encenderla) */}
+      {!camaraActiva && (
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+          <button
+            onClick={encenderCamara}
+            disabled={cargandoPermiso}
+            className="px-6 py-3 font-bold text-xs rounded-xl shadow-lg transition flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-emerald-500/20 cursor-pointer"
+          >
+            <Camera className="w-4 h-4" />
+            Encender Cámara Web Real (720p)
+          </button>
 
-        {!camaraActiva && (
           <button
             onClick={activarCamaraSimulada}
-            className="px-5 py-3 bg-violet-600/30 hover:bg-violet-600/50 text-violet-300 border border-violet-500/30 font-bold text-xs rounded-xl transition flex items-center gap-2"
+            className="px-5 py-3 bg-violet-600/30 hover:bg-violet-600/50 text-violet-300 border border-violet-500/30 font-bold text-xs rounded-xl transition flex items-center gap-2 cursor-pointer"
           >
             <Sparkles className="w-4 h-4 text-violet-400" /> Usar Cámara Simulada Demo
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
     </div>
   );
