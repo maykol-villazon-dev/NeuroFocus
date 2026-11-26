@@ -752,6 +752,13 @@ export const DashboardAutoridades: React.FC = () => {
             const data = JSON.parse(event.data);
             if (data.pong) return;
 
+            // Escuchar cambios de privacidad en tiempo real desde WebSocket
+            if (data.tipo === 'CAMBIO_PRIVACIDAD') {
+              console.log('[DASHBOARD WS] Cambio de privacidad recibido para estudiante:', data.protegido);
+              setEstudianteActivo(prev => prev ? { ...prev, protegido: data.protegido } : null);
+              setEstudiantes(prev => prev.map(e => e.codigo_estudiante === codigoEst ? { ...e, protegido: data.protegido } : e));
+            }
+
             // Fotograma de video en tiempo real con malla facial MediaPipe
             if (data.frame) {
               setFrameStream(data.frame);
@@ -1495,26 +1502,43 @@ export const DashboardAutoridades: React.FC = () => {
 
                 {/* Panel Izquierdo: Monitor de Cámara y Malla Facial (MediaPipe Face Mesh 3D) */}
                 <div className="glass-panel p-6 rounded-3xl border border-slate-800 flex flex-col justify-between space-y-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
                     <div>
                       <h3 className="text-lg font-bold font-heading text-white flex items-center gap-2">
                         <Video className="w-5 h-5 text-cyan-400" /> Monitor de Cámara y Malla Facial
                       </h3>
                       <p className="text-xs text-slate-400 mt-0.5">Visión computacional MediaPipe FaceMesh & SolvePnP 3D</p>
                     </div>
-                    {!tienePermiso('MONITOREAR_TIEMPO_REAL') ? (
-                      <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase flex items-center gap-1.5">
-                        <ShieldCheck className="w-3.5 h-3.5 text-slate-400" /> Acceso Restringido
-                      </span>
-                    ) : recibiendoTelemetria && frameStream ? (
-                      <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase flex items-center gap-1.5">
-                        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Feed HD en Vivo (~6 FPS)
-                      </span>
-                    ) : (
-                      <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase flex items-center gap-1.5">
-                        <CameraOff className="w-3.5 h-3.5" /> Cámara en Espera
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {estudianteActivo && tienePermiso('GESTIONAR_PRIVACIDAD_ESTUDIANTE') && (
+                        <button
+                          onClick={(e) => togglePrivacidadEstudiante(estudianteActivo, e)}
+                          disabled={actualizandoPrivacidad === estudianteActivo.codigo_estudiante}
+                          title={estudianteActivo.protegido !== false ? 'Actualmente en Malla 3D Anonimizada. Clic para solicitar proyección de Rostro Real (Requiere consentimiento Ley 548).' : 'Actualmente proyectando Rostro Real. Clic para volver a Malla 3D Anonimizada.'}
+                          className={`px-3 py-1 rounded-full text-[11px] font-bold border transition flex items-center gap-1.5 cursor-pointer shadow-sm ${
+                            estudianteActivo.protegido !== false
+                              ? 'bg-emerald-500/10 hover:bg-emerald-500/25 text-emerald-400 border-emerald-500/30'
+                              : 'bg-amber-500/10 hover:bg-amber-500/25 text-amber-300 border-amber-500/30 animate-pulse'
+                          }`}
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          <span>{estudianteActivo.protegido !== false ? '🛡️ Malla 3D Anonimizada' : '📷 Rostro Real (Auditado)'}</span>
+                        </button>
+                      )}
+                      {!tienePermiso('MONITOREAR_TIEMPO_REAL') ? (
+                        <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase flex items-center gap-1.5">
+                          <ShieldCheck className="w-3.5 h-3.5 text-slate-400" /> Acceso Restringido
+                        </span>
+                      ) : recibiendoTelemetria && frameStream ? (
+                        <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 text-[10px] font-bold uppercase flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span> Feed HD en Vivo (~6 FPS)
+                        </span>
+                      ) : (
+                        <span className="px-2.5 py-1 rounded-full bg-slate-800 text-slate-400 border border-slate-700 text-[10px] font-bold uppercase flex items-center gap-1.5">
+                          <CameraOff className="w-3.5 h-3.5" /> Cámara en Espera
+                        </span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Viewport del Frame en Alta Definición y Aspect Ratio Nativo */}
@@ -1549,12 +1573,17 @@ export const DashboardAutoridades: React.FC = () => {
                             </div>
                           )}
 
-                          <div className={`absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-slate-950/80 backdrop-blur-md border text-[10px] font-mono flex items-center gap-2 z-10 ${
-                            estudianteActivo?.protegido !== false ? 'border-emerald-500/40 text-emerald-300' : 'border-amber-500/40 text-amber-300'
-                          }`}>
+                          <button
+                            type="button"
+                            onClick={(e) => estudianteActivo && togglePrivacidadEstudiante(estudianteActivo, e)}
+                            title="Haz clic para alternar el modo de privacidad (Malla 3D / Rostro Real)"
+                            className={`absolute bottom-2.5 left-2.5 px-2.5 py-1 rounded-lg bg-slate-950/80 hover:bg-slate-900/90 backdrop-blur-md border text-[10px] font-mono flex items-center gap-2 z-10 cursor-pointer transition shadow-md ${
+                              estudianteActivo?.protegido !== false ? 'border-emerald-500/40 text-emerald-300 hover:border-emerald-400' : 'border-amber-500/40 text-amber-300 hover:border-amber-400'
+                            }`}
+                          >
                             <span className={`w-1.5 h-1.5 rounded-full animate-ping ${estudianteActivo?.protegido !== false ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
                             {estudianteActivo?.protegido !== false ? '🛡️ Malla 3D Anonimizada' : '📷 Rostro Real Auditado'}
-                          </div>
+                          </button>
 
                           {/* Badges de Biomarcadores Clínicos Específicos */}
                           <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5 z-10">

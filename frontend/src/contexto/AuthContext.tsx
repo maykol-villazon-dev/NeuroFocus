@@ -91,11 +91,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const res = await apiCliente.get('/auth/me');
         if (res.data) {
           const userActual: Usuario = {
+            id_usuario: res.data.id_usuario,
             username: res.data.username,
             rol: res.data.rol,
             codigo_estudiante: res.data.codigo_estudiante,
             email: res.data.email,
-            permisos: res.data.permisos || []
+            permisos: res.data.permisos || [],
+            grado_escolar: res.data.grado_escolar,
+            subtipo_tdah: res.data.subtipo_tdah,
+            protegido: res.data.protegido !== undefined ? res.data.protegido : true,
+            nombre_completo: res.data.nombre_completo
           };
           setUsuario(userActual);
           localStorage.setItem('usuario_actual', JSON.stringify(userActual));
@@ -202,12 +207,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         headers: { 'Content-Type': 'multipart/form-data' }
       });
 
-      const { access_token, username, rol, codigo_estudiante, permisos } = res.data;
+      const { access_token, username, rol, codigo_estudiante, permisos, protegido, grado_escolar, subtipo_tdah, nombre_completo } = res.data;
       const nuevoUsuario: Usuario = {
         username,
         rol,
         codigo_estudiante,
-        permisos: permisos || []
+        permisos: permisos || [],
+        protegido: protegido !== undefined ? protegido : true,
+        grado_escolar,
+        subtipo_tdah,
+        nombre_completo
       };
 
       localStorage.setItem('access_token', access_token);

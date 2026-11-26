@@ -53,9 +53,9 @@ export const PrevisualizadorCamara = forwardRef<PrevisualizadorCamaraHandle, Pre
   const animFrameIdRef = useRef<number | null>(null);
 
   // Referencia mutable reactiva para modoProtegido (Evita stale closures en MediaPipe y permite cambio instantáneo)
-  const modoProtegidoRef = useRef<boolean>(modoProtegido);
+  const modoProtegidoRef = useRef<boolean>(modoProtegido !== false);
   useEffect(() => {
-    modoProtegidoRef.current = modoProtegido;
+    modoProtegidoRef.current = modoProtegido !== false;
   }, [modoProtegido]);
 
   const [camaraActiva, setCamaraActiva] = useState<boolean>(false);

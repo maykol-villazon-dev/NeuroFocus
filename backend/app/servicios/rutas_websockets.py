@@ -237,6 +237,20 @@ class ConnectionManager:
             self.motores_fusion[cod] = MotorFusionAtencional()
         self.active_connections[cod].add(websocket)
         print(f"[WS CONNECT] Cliente conectado a sala '{cod}'. Total clientes en sala: {len(self.active_connections[cod])}")
+        
+        # Sincronización inmediata del estado de privacidad persistido en BD
+        try:
+            async with AsyncSessionLocal() as db:
+                st_res = await db.execute(select(Estudiante).where(Estudiante.codigo_estudiante == cod))
+                est = st_res.scalars().first()
+                if est:
+                    prot_val = bool(est.protegido) if est.protegido is not None else True
+                    await websocket.send_text(json.dumps({
+                        "tipo": "CAMBIO_PRIVACIDAD",
+                        "protegido": prot_val
+                    }))
+        except Exception as e:
+            print(f"[WS PRIVACIDAD] Error enviando estado inicial a {cod}: {e}")
 
     async def asegurar_sesion_activa(self, codigo_estudiante: str):
         """Inicializa formalmente la sesión en BD únicamente cuando el estudiante envía telemetría real con cámara."""
