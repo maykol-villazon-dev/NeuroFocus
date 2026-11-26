@@ -2,11 +2,16 @@ import React, { createContext, useContext, useState, useEffect, useRef } from 'r
 import { apiCliente } from '../servicios_ws/api_cliente';
 
 export interface Usuario {
+  id_usuario?: string;
   username: string;
   email?: string;
   rol: string;
   codigo_estudiante?: string;
   permisos?: string[];
+  grado_escolar?: string;
+  subtipo_tdah?: string;
+  protegido?: boolean;
+  nombre_completo?: string;
 }
 
 export interface RegistroData {

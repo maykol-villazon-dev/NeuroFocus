@@ -50,6 +50,10 @@ class UsuarioMeSchema(BaseModel):
     activo: bool = True
     codigo_estudiante: Optional[str] = None
     permisos: list[str] = []
+    grado_escolar: Optional[str] = None
+    subtipo_tdah: Optional[str] = None
+    protegido: Optional[bool] = None
+    nombre_completo: Optional[str] = None
 
 
 # --- Helper para Obtener Permisos de un Usuario ---
@@ -297,7 +301,13 @@ async def obtener_perfil_actual(
     db: AsyncSession = Depends(get_db)
 ):
     """Retorna los datos del usuario autenticado actualmente junto a sus permisos granulares."""
-    cod_est = usuario_actual.estudiante.codigo_estudiante if usuario_actual.estudiante else None
+    est = usuario_actual.estudiante
+    cod_est = est.codigo_estudiante if est else None
+    grado = est.grado_escolar if est else None
+    subtipo = (est.subtipo_tdah.value if hasattr(est.subtipo_tdah, 'value') else str(est.subtipo_tdah)) if est else None
+    prot = est.protegido if est else None
+    nom_comp = est.nombre_completo if est else None
+
     lista_permisos = await obtener_permisos_usuario(usuario_actual, db)
     rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
     return {
@@ -308,7 +318,11 @@ async def obtener_perfil_actual(
         "verificado": getattr(usuario_actual, "verificado", True),
         "activo": getattr(usuario_actual, "activo", True),
         "codigo_estudiante": cod_est,
-        "permisos": lista_permisos
+        "permisos": lista_permisos,
+        "grado_escolar": grado,
+        "subtipo_tdah": subtipo,
+        "protegido": prot,
+        "nombre_completo": nom_comp
     }
 
 

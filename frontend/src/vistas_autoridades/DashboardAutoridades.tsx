@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Search, Eye, UserCheck, Activity, Download, AlertCircle, FileText, 
+  Search, Eye, UserCheck, Activity, Download, AlertCircle, AlertTriangle, FileText, 
   CheckCircle2, Sliders, Layers, Radio, Sparkles, Menu, X, 
   LayoutDashboard, Users, RefreshCw, ChevronRight, Clock, ShieldCheck, Edit3, Save,
   Camera, CameraOff, Video, BookOpen, ChevronDown, ChevronUp, Upload, Trash2,
@@ -216,6 +216,13 @@ export const DashboardAutoridades: React.FC = () => {
 
   // Modal de actualización clínica / reclasificación de diagnóstico
   const [modalEditar, setModalEditar] = useState<boolean>(false);
+  const [modalConfirmarRostroReal, setModalConfirmarRostroReal] = useState<{
+    abierto: boolean;
+    estudiante: EstudianteItem | null;
+  }>({
+    abierto: false,
+    estudiante: null
+  });
   const [modalNotificacion, setModalNotificacion] = useState<ModalNotificacionConfig>({
     abierto: false,
     titulo: '',
@@ -613,10 +620,8 @@ export const DashboardAutoridades: React.FC = () => {
     }
   };
 
-  // Cambio de Modo de Privacidad (Privacy by Design - Malla 3D vs Rostro Real)
-  const togglePrivacidadEstudiante = async (est: EstudianteItem, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    const nuevoProtegido = est.protegido !== undefined ? !est.protegido : false;
+  // Ejecución del cambio de privacidad en base de datos y WebSockets
+  const ejecutarCambioPrivacidad = async (est: EstudianteItem, nuevoProtegido: boolean) => {
     setActualizandoPrivacidad(est.codigo_estudiante);
     try {
       await apiCliente.patch(`/monitoreo/estudiantes/${est.codigo_estudiante}/privacidad`, { protegido: nuevoProtegido });
@@ -629,6 +634,21 @@ export const DashboardAutoridades: React.FC = () => {
     } finally {
       setActualizandoPrivacidad(null);
     }
+  };
+
+  // Cambio de Modo de Privacidad (Privacy by Design - Malla 3D vs Rostro Real)
+  const togglePrivacidadEstudiante = async (est: EstudianteItem, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const protegidoActual = est.protegido !== false; // true si es true o undefined (Malla 3D)
+
+    // Si actualmente está con Malla 3D y se desea activar Rostro Real, exigir confirmación legal
+    if (protegidoActual) {
+      setModalConfirmarRostroReal({ abierto: true, estudiante: est });
+      return;
+    }
+
+    // Si ya está en Rostro Real y se desea volver a Malla 3D anonimizada, proceder directamente
+    await ejecutarCambioPrivacidad(est, true);
   };
 
   // Descarga de Reporte PDF (HU-11) — Permite descargar reporte completo o resumen (Top 8 eventos críticos)
@@ -2783,6 +2803,66 @@ export const DashboardAutoridades: React.FC = () => {
 
         </div>
       </main>
+
+      {/* ========================================================================= */}
+      {/* MODAL: CONFIRMACIÓN DE PRIVACIDAD PARA ACTIVAR ROSTRO REAL (LEY 548)     */}
+      {/* ========================================================================= */}
+      {modalConfirmarRostroReal.abierto && modalConfirmarRostroReal.estudiante && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="relative w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 border-b border-slate-800 pb-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">¿Activar Rostro Real del Estudiante?</h3>
+                <p className="text-xs text-amber-400/90 font-medium">Consentimiento y Privacidad Biométrica (Ley 548)</p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs leading-relaxed text-slate-300">
+              <div className="p-3 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-1">
+                <p className="text-slate-400">Estudiante seleccionado:</p>
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-white font-mono text-sm">{modalConfirmarRostroReal.estudiante.nombre_completo}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-emerald-400 font-mono">
+                    {modalConfirmarRostroReal.estudiante.codigo_estudiante}
+                  </span>
+                </div>
+              </div>
+
+              <p>
+                Está a punto de <strong className="text-amber-300">desactivar la Malla Facial 3D anonimizada</strong> y proyectar la imagen real de la cámara web del estudiante en este monitor clínico.
+              </p>
+              <p className="text-slate-400 text-[11px] bg-amber-500/10 border border-amber-500/20 p-2.5 rounded-xl">
+                ⚠️ <strong className="text-amber-200">Aviso Legal:</strong> La captura y proyección de rostro real de un menor de edad requiere la autorización previa y consentimiento informado de su tutor legal.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setModalConfirmarRostroReal({ abierto: false, estudiante: null })}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-semibold text-xs transition cursor-pointer"
+              >
+                Cancelar (Mantener Malla 3D)
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (modalConfirmarRostroReal.estudiante) {
+                    await ejecutarCambioPrivacidad(modalConfirmarRostroReal.estudiante, false);
+                  }
+                  setModalConfirmarRostroReal({ abierto: false, estudiante: null });
+                }}
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-bold text-xs shadow-lg shadow-amber-600/30 transition flex items-center gap-1.5 cursor-pointer"
+              >
+                Confirmar y Activar Rostro Real
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal de Notificación In-App */}
       <ModalNotificacion

@@ -83,51 +83,61 @@ export const PortalEstudiante: React.FC = () => {
 
   // Cargar datos dinámicos del estudiante desde la base de datos
   useEffect(() => {
-    const cargarPerfilDesdeBD = async () => {
-      const codigo = usuario?.codigo_estudiante || 'EST-2026-001';
-      try {
-        const res = await apiCliente.get(`/monitoreo/estudiantes/${codigo}`);
-        if (res.data) {
-          setPerfilEstudiante(res.data);
-        }
-      } catch (err) {
-        console.warn('[PORTAL ESTUDIANTE] No se pudo cargar el perfil específico desde BD:', err);
-      }
-    };
     if (usuario) {
+      // Inicializar de inmediato con los datos que ya vienen de /auth/me
+      if (usuario.codigo_estudiante) {
+        setPerfilEstudiante(prev => prev || {
+          codigo_estudiante: usuario.codigo_estudiante || '',
+          nombre_completo: usuario.nombre_completo || usuario.username || 'Estudiante',
+          grado_escolar: usuario.grado_escolar || '',
+          subtipo_tdah: usuario.subtipo_tdah || 'CONTROL',
+          diagnostico_observacion: '',
+          protegido: usuario.protegido !== undefined ? usuario.protegido : true
+        });
+      }
+
+      const cargarPerfilDesdeBD = async () => {
+        const codigo = usuario.codigo_estudiante;
+        if (!codigo) return;
+        try {
+          const res = await apiCliente.get(`/monitoreo/estudiantes/${codigo}`);
+          if (res.data) {
+            setPerfilEstudiante(res.data);
+          }
+        } catch (err) {
+          console.warn('[PORTAL ESTUDIANTE] No se pudo cargar el perfil específico desde BD:', err);
+        }
+      };
+
       cargarPerfilDesdeBD();
     }
   }, [usuario]);
 
   // Formateador visual del Subtipo Clínico DSM-5-TR
   const getEtiquetaSubtipo = (subtipo?: string) => {
-    switch (subtipo) {
-      case 'CONTROL':
-      case 'SIN_TDAH':
-        return {
-          texto: 'Grupo Control / Neurotípico (Sin TDAH)',
-          estilo: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
-        };
-      case 'F90_0':
-      case 'inattentive':
-        return {
-          texto: 'DSM-5-TR: F90.0 (Déficit Atencional / Inatento)',
-          estilo: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
-        };
-      case 'F90_1':
-      case 'hyperactive':
-        return {
-          texto: 'DSM-5-TR: F90.1 (Hiperactivo / Impulsivo)',
-          estilo: 'bg-purple-500/10 text-purple-300 border-purple-500/30'
-        };
-      case 'F90_2':
-      case 'combined':
-      default:
-        return {
-          texto: 'DSM-5-TR: F90.2 (Presentación Combinada)',
-          estilo: 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-        };
+    const s = (subtipo || '').trim().toUpperCase();
+    if (s === 'CONTROL' || s === 'SIN_TDAH' || s === 'SIN_DIAGNOSTICO' || s === 'SIN DIAGNOSTICO' || s === 'GRUPO CONTROL') {
+      return {
+        texto: 'Grupo Control (Sin Diagnóstico TDAH)',
+        estilo: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+      };
     }
+    if (s === 'F90_0' || s === 'F90.0' || s === 'INATTENTIVE') {
+      return {
+        texto: 'DSM-5-TR: F90.0 (Déficit Atencional / Inatento)',
+        estilo: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+      };
+    }
+    if (s === 'F90_1' || s === 'F90.1' || s === 'HYPERACTIVE') {
+      return {
+        texto: 'DSM-5-TR: F90.1 (Hiperactivo / Impulsivo)',
+        estilo: 'bg-purple-500/10 text-purple-300 border-purple-500/30'
+      };
+    }
+    return {
+      texto: 'DSM-5-TR: F90.2 (Presentación Combinada)',
+      estilo: 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+    };
   };
 
   // Instancia del Acumulador Matemático Real de 900 Muestras (Sprint 2 - HU-03)
@@ -221,9 +231,9 @@ export const PortalEstudiante: React.FC = () => {
             console.log('[WEBSOCKET] Cambio de modo de privacidad recibido:', data.protegido);
             setPerfilEstudiante(prev => prev ? ({ ...prev, protegido: data.protegido }) : ({
               codigo_estudiante: codigoEst,
-              nombre_completo: usuario?.username || 'Estudiante',
-              grado_escolar: '3º de Secundaria',
-              subtipo_tdah: 'F90.2',
+              nombre_completo: usuario?.nombre_completo || usuario?.username || 'Estudiante',
+              grado_escolar: usuario?.grado_escolar || 'Grado Escolar',
+              subtipo_tdah: usuario?.subtipo_tdah || 'CONTROL',
               diagnostico_observacion: '',
               protegido: data.protegido
             }));
@@ -637,10 +647,10 @@ export const PortalEstudiante: React.FC = () => {
             <p className="text-slate-400 text-sm flex items-center gap-2 flex-wrap">
               <span>Código: <strong className="text-emerald-400 font-mono">{usuario?.codigo_estudiante || 'EST-2026-001'}</strong></span>
               <span>•</span>
-              <span className="text-slate-300 font-medium">{perfilEstudiante?.grado_escolar || '3º de Secundaria'}</span>
+              <span className="text-slate-300 font-medium">{perfilEstudiante?.grado_escolar || usuario?.grado_escolar || 'Grado Escolar'}</span>
               <span>•</span>
-              <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${getEtiquetaSubtipo(perfilEstudiante?.subtipo_tdah).estilo}`}>
-                {getEtiquetaSubtipo(perfilEstudiante?.subtipo_tdah).texto}
+              <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${getEtiquetaSubtipo(perfilEstudiante?.subtipo_tdah || usuario?.subtipo_tdah).estilo}`}>
+                {getEtiquetaSubtipo(perfilEstudiante?.subtipo_tdah || usuario?.subtipo_tdah).texto}
               </span>
             </p>
           </div>
@@ -689,7 +699,7 @@ export const PortalEstudiante: React.FC = () => {
               segundosRestantes={segundosRestantes}
               forzarEncendido={forzarEncendidoCamara}
               timestampUltimaInteraccion={tsUltimaInteraccion}
-              modoProtegido={perfilEstudiante?.protegido ?? true}
+              modoProtegido={perfilEstudiante?.protegido ?? usuario?.protegido ?? true}
               ref={camaraRef}
             />
 

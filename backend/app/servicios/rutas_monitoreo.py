@@ -229,15 +229,21 @@ async def obtener_estudiante_por_codigo(
     if not est:
         raise HTTPException(status_code=404, detail="Estudiante no encontrado.")
 
-    # Control de acceso: Si no puede ver todos, verificar si es su tutorado
-    permisos = await obtener_permisos_usuario(usuario_actual, db)
-    rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
-    if rol_str != "SUPERADMIN" and "VER_TODOS_ESTUDIANTES" not in permisos:
-        if "VER_ESTUDIANTES_ASIGNADOS" in permisos:
-            if est.id_tutor != usuario_actual.id_usuario:
-                raise HTTPException(status_code=403, detail="Acceso denegado: No tiene autorización para consultar los datos de este estudiante.")
-        else:
-            raise HTTPException(status_code=403, detail="Acceso denegado: No cuenta con permisos para ver estudiantes.")
+    # Control de acceso: Permitir si es el propio estudiante consultando su propio perfil
+    es_propio_estudiante = (
+        est.id_usuario == usuario_actual.id_usuario or
+        (usuario_actual.estudiante and usuario_actual.estudiante.codigo_estudiante.strip().upper() == cod_key)
+    )
+
+    if not es_propio_estudiante:
+        permisos = await obtener_permisos_usuario(usuario_actual, db)
+        rol_str = usuario_actual.rol.value if hasattr(usuario_actual.rol, "value") else str(usuario_actual.rol)
+        if rol_str != "SUPERADMIN" and "VER_TODOS_ESTUDIANTES" not in permisos:
+            if "VER_ESTUDIANTES_ASIGNADOS" in permisos:
+                if est.id_tutor != usuario_actual.id_usuario:
+                    raise HTTPException(status_code=403, detail="Acceso denegado: No tiene autorización para consultar los datos de este estudiante.")
+            else:
+                raise HTTPException(status_code=403, detail="Acceso denegado: No cuenta con permisos para ver estudiantes.")
 
     # Verificar si está realmente en línea en WebSockets
     esta_en_linea = False
