@@ -3,6 +3,7 @@ import {
   ShieldCheck, Camera, Sparkles, Activity, Eye, Cpu, Lock, 
   ArrowRight, Mail, Phone, Facebook, Instagram, Youtube, Linkedin, UserPlus, LogIn, CheckCircle2
 } from 'lucide-react';
+import { TutorialInteractivoEstudiante } from '../componentes_ui/TutorialInteractivoEstudiante';
 
 interface LandingPageProps {
   onAbrirLogin: () => void;
@@ -81,7 +82,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onAbrirLogin, onAbrirR
         </div>
       </section>
 
-      {/* 2. GRID DE TECNOLOGÍAS BIOMÉTRICAS */}
+      {/* 2. TUTORIAL INTERACTIVO Y ANIMADO PARA ESTUDIANTES */}
+      <TutorialInteractivoEstudiante
+        onIniciarSesion={onAbrirLogin}
+        onRegistrarse={onAbrirRegistro}
+      />
+
+      {/* 3. GRID DE TECNOLOGÍAS BIOMÉTRICAS */}
       <section className="py-16 px-6 bg-slate-900/40 border-y border-slate-800/80">
         <div className="max-w-7xl mx-auto space-y-12">
           <div className="text-center max-w-2xl mx-auto space-y-3">

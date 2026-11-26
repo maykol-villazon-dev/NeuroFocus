@@ -177,17 +177,16 @@ async def obtener_estudiantes_con_tutores(db: AsyncSession = Depends(get_db)):
     res_est = await db.execute(select(Estudiante).order_by(Estudiante.nombre_completo.asc()))
     estudiantes = res_est.scalars().all()
 
-    # Consultar todos los tutores/apoderados disponibles (rol TUTOR o roles con permiso VER_ESTUDIANTES_ASIGNADOS)
-    subquery_tutor_roles = (
-        select(RolPermiso.id_rol)
-        .join(Permiso, Permiso.id_permiso == RolPermiso.id_permiso)
-        .where(Permiso.codigo_permiso == "VER_ESTUDIANTES_ASIGNADOS")
+    # Consultar estrictamente usuarios con rol TUTOR (o APODERADO / PADRE_FAMILIA)
+    subquery_tutor_role_names = (
+        select(Rol.id_rol)
+        .where(Rol.nombre_rol.in_(["TUTOR", "APODERADO", "PADRE_FAMILIA"]))
     )
     res_tutores = await db.execute(
         select(Usuario).where(
             (Usuario.rol == RolUsuario.TUTOR) |
             (Usuario.rol.in_(["TUTOR", "APODERADO", "PADRE_FAMILIA"])) |
-            (Usuario.id_rol.in_(subquery_tutor_roles))
+            (Usuario.id_rol.in_(subquery_tutor_role_names))
         ).order_by(Usuario.username.asc())
     )
     tutores = res_tutores.scalars().all()
@@ -215,6 +214,7 @@ async def obtener_estudiantes_con_tutores(db: AsyncSession = Depends(get_db)):
         {
             "id_usuario": t.id_usuario,
             "username": t.username,
+            "nombre_completo": getattr(t, "nombre_completo", None) or t.username,
             "email": t.email
         }
         for t in tutores
@@ -240,22 +240,21 @@ async def vincular_o_desvincular_tutor(
     tutor_id_final = payload.id_tutor if payload.id_tutor and payload.id_tutor.strip() else None
 
     if tutor_id_final:
-        # Validar que el tutor existe y tiene rol o capacidad de tutoría asignada
-        subquery_tutor_roles = (
-            select(RolPermiso.id_rol)
-            .join(Permiso, Permiso.id_permiso == RolPermiso.id_permiso)
-            .where(Permiso.codigo_permiso == "VER_ESTUDIANTES_ASIGNADOS")
+        # Validar que el usuario seleccionado tenga estrictamente el rol de TUTOR
+        subquery_tutor_role_names = (
+            select(Rol.id_rol)
+            .where(Rol.nombre_rol.in_(["TUTOR", "APODERADO", "PADRE_FAMILIA"]))
         )
         res_tutor = await db.execute(
             select(Usuario).where(
                 Usuario.id_usuario == tutor_id_final,
                 (Usuario.rol == RolUsuario.TUTOR) |
                 (Usuario.rol.in_(["TUTOR", "APODERADO", "PADRE_FAMILIA"])) |
-                (Usuario.id_rol.in_(subquery_tutor_roles))
+                (Usuario.id_rol.in_(subquery_tutor_role_names))
             )
         )
         if not res_tutor.scalars().first():
-            raise HTTPException(status_code=400, detail="El ID proporcionado no pertenece a un Tutor o Apoderado válido.")
+            raise HTTPException(status_code=400, detail="El usuario seleccionado no cuenta con el rol de Tutor o Padre de Familia.")
 
     est.id_tutor = tutor_id_final
     await db.commit()

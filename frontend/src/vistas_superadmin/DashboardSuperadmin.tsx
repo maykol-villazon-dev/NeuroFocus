@@ -103,6 +103,7 @@ interface EstudianteTutorItem {
 interface TutorDisponible {
   id_usuario: string;
   username: string;
+  nombre_completo?: string;
   email: string;
 }
 
@@ -2485,19 +2486,25 @@ export const DashboardSuperadmin: React.FC = () => {
             </p>
 
             <div className="space-y-1 text-xs">
-              <label className="text-slate-400">Seleccionar Tutor / Padre de Familia:</label>
-              <select
-                value={modalVincularTutor.tutorSeleccionado}
-                onChange={(e) => setModalVincularTutor({ ...modalVincularTutor, tutorSeleccionado: e.target.value })}
-                className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none focus:border-indigo-500"
-              >
-                <option value="">-- Sin Tutor Vinculado (Desvincular) --</option>
-                {tutoresDisponibles.map((t) => (
-                  <option key={t.id_usuario} value={t.id_usuario}>
-                    {t.username} ({t.email})
-                  </option>
-                ))}
-              </select>
+              <label className="text-slate-400">Seleccionar Tutor / Padre de Familia (Rol TUTOR):</label>
+              {tutoresDisponibles.length === 0 ? (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-xs">
+                  ⚠️ No existen usuarios con el rol <strong>TUTOR</strong> registrados o aprobados en el sistema. Debe asignar el rol de TUTOR al padre de familia en Usuarios Pendientes o Gestión de Usuarios.
+                </div>
+              ) : (
+                <select
+                  value={modalVincularTutor.tutorSeleccionado}
+                  onChange={(e) => setModalVincularTutor({ ...modalVincularTutor, tutorSeleccionado: e.target.value })}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-white outline-none focus:border-indigo-500 cursor-pointer"
+                >
+                  <option value="">-- Sin Tutor Vinculado (Desvincular) --</option>
+                  {tutoresDisponibles.map((t) => (
+                    <option key={t.id_usuario} value={t.id_usuario}>
+                      {t.nombre_completo && t.nombre_completo !== t.username ? `${t.nombre_completo} (${t.username})` : t.username} — {t.email}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
 
             <div className="pt-2 flex items-center justify-end gap-3 text-xs">
