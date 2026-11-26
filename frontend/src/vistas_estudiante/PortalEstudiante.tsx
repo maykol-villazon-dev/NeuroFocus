@@ -36,7 +36,7 @@ export const PortalEstudiante: React.FC = () => {
   const { usuario, logout } = useAuth();
   const [sidebarMobileAbierta, setSidebarMobileAbierta] = useState<boolean>(false);
 
-  // Control de Navegación del Estudiante persistente ante recargas F5
+  // Control de Navegación del Estudiante: Por regla de negocio, al iniciar sesión siempre aterriza en DASHBOARD
   const [seccionActiva, setSeccionActivaState] = useState<SeccionEstudiante>(() => {
     const s = sessionStorage.getItem('portal_estudiante_seccion_activa');
     return s === 'MODO_ESTUDIO' ? 'MODO_ESTUDIO' : 'DASHBOARD';
@@ -46,6 +46,16 @@ export const PortalEstudiante: React.FC = () => {
     setSeccionActivaState(sec);
     sessionStorage.setItem('portal_estudiante_seccion_activa', sec);
   };
+
+  // Restablecer obligatoriamente al DASHBOARD si cambia el usuario o no hay clave explícita de navegación
+  useEffect(() => {
+    if (usuario) {
+      const s = sessionStorage.getItem('portal_estudiante_seccion_activa');
+      if (!s) {
+        setSeccionActivaState('DASHBOARD');
+      }
+    }
+  }, [usuario?.username]);
 
   const [menuHamburguesaAbierto, setMenuHamburguesaAbierto] = useState<boolean>(false);
 

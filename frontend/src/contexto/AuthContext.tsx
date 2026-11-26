@@ -222,6 +222,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       localStorage.setItem('access_token', access_token);
       localStorage.setItem('usuario_actual', JSON.stringify(nuevoUsuario));
 
+      // Limpiar secciones previas para garantizar que el usuario ingrese siempre a la pantalla de bienvenida/dashboard inicial
+      sessionStorage.removeItem('portal_estudiante_seccion_activa');
+      sessionStorage.removeItem('dashboard_seccion_activa');
+      sessionStorage.removeItem('dashboard_codigo_estudiante');
+
       setToken(access_token);
       setUsuario(nuevoUsuario);
       setCargando(false);
@@ -316,6 +321,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = () => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('usuario_actual');
+    sessionStorage.removeItem('portal_estudiante_seccion_activa');
     sessionStorage.removeItem('dashboard_seccion_activa');
     sessionStorage.removeItem('dashboard_codigo_estudiante');
     setToken(null);
